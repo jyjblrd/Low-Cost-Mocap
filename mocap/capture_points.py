@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2 as cv
 
-c = Camera(fps=150, resolution=Camera.RES_SMALL, gain=0, exposure=100)
+c = Camera(fps=150, resolution=Camera.RES_SMALL, gain=15, exposure=100)
 
 camera_params = [
     {
@@ -39,7 +39,7 @@ def init_frame(img, camera_num):
 def find_dot(img):
     img = cv.GaussianBlur(img,(5,5),0)
     grey = cv.cvtColor(img, cv.COLOR_RGB2GRAY)
-    grey = cv.threshold(grey, 255*0.4, 255, cv.THRESH_BINARY)[1]
+    grey = cv.threshold(grey, 255*0.2, 255, cv.THRESH_BINARY)[1]
     contours,_ = cv.findContours(grey, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     img = cv.drawContours(img, contours, -1, (0,255,0), 1)
 

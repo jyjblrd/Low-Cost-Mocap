@@ -1,0 +1,7 @@
+@import 'shared/styles/bootstrapOverrides.scss';
+
+@import "../node_modules/bootstrap/scss/bootstrap";
+
+html, body {
+  background-color: $gray-100;
+}
