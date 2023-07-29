@@ -8,8 +8,8 @@ import { Tooltip } from 'react-tooltip'
 import SceneViewer from './components/SceneViewer';
 import { io } from 'socket.io-client';
 
-// const socket = io("http://localhost:3000", {path: "/api/socket.io"});
-// console.log(socket)
+const socket = io("http://localhost:3001");
+console.log(socket)
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -19,50 +19,49 @@ export default function App() {
 
   const [capturingPointsForPose, setCapturingPointsForPose] = useState(false);
   const [capturedPointsForPose, setCapturedPointsForPose] = useState("");
-  const [liveMocap, setLiveMocap] = useState(false);
+  
+  const [isTriangulatingPoints, setIsTriangulatingPoints] = useState(false);
+  const [objectPoints, setObjectPoints] = useState([]);
 
   const [rotationMatrix, setRotationMatrix] = useState<Array<Array<number>>>()
   const [translationMatrix, setTranslationMatrix] = useState<Array<number>>()
 
   const updateCameraSettings: FormEventHandler = (e) => {
     e.preventDefault()
-    
-    fetch('/api/update-camera-settings', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        exposure,
-        gain,
-      })
+    socket.emit("update-camera-settings", {
+      exposure,
+      gain,
     })
   }
 
   const capturePointsForPose = async (startOrStop: string) => {
-    console.log("daw")
-    //socket.io.emit("capture-points", { startOrStop })
+    if (startOrStop === "start") {
+      setCapturedPointsForPose("")
+    }
+    socket.emit("capture-points", { startOrStop })
   }
 
-  // socket.io.on("captured-points", (data) => {
-  // })
+  socket.on("image-points", (data) => {
+    if (capturingPointsForPose) {
+      setCapturedPointsForPose(`${capturedPointsForPose}${JSON.stringify(data)},`)
+    }
+  })
+
+  socket.on("object-point", (data) => {
+    if (isTriangulatingPoints) {
+      objectPoints.push(data)
+      setObjectPoints(objectPoints)
+    }
+  })
 
   const calculateCameraPose = async (cameraPoints: Array<Array<Array<number>>>) => {
-    const response = await fetch('/api/calculate-camera-pose', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        cameraPoints
-      })
-    })
-    const {R, t} = await response.json()
+    socket.emit("calculate-camera-pose", { cameraPoints })
+  }
+
+  socket.on("camera-pose", ({R, t}) => {
     setRotationMatrix(R)
     setTranslationMatrix(t)
-  }
+  })
 
   const isValidJson = (str: string) => {
     try {
@@ -75,7 +74,11 @@ export default function App() {
   }
 
   const startLiveMocap = (startOrStop: string) => {
-
+    let r1 = [[1,0,0],[0,1,0],[0,0,1]]
+    let t1 = [0,0,0]
+    let r2 = rotationMatrix
+    let t2 = translationMatrix
+    socket.emit("triangulate-points", { startOrStop, r1, t1, r2, t2 })
   }
 
   return (
@@ -109,7 +112,7 @@ export default function App() {
             </Row>
             <Row className='mt-2 mb-1' style={{height: "320px"}}>
               <Col>
-                <img src={cameraStreamRunning ? "/api/camera-stream" : ""} />
+                <img src={cameraStreamRunning ? "http://localhost:3001/api/camera-stream" : ""} />
               </Col>
             </Row>
           </Card>
@@ -167,7 +170,7 @@ export default function App() {
                 <Form.Control 
                   as="textarea" 
                   rows={5} 
-                  value={capturingPointsForPose ? "Capturing Points..." : capturedPointsForPose}
+                  value={capturedPointsForPose}
                   onChange={(event) => setCapturedPointsForPose(event.target.value)}
                 />
               </Col>
@@ -178,11 +181,11 @@ export default function App() {
                   size='sm' 
                   className='float-end'
                   variant="outline-primary"
-                  disabled={!(isValidJson(capturedPointsForPose) && JSON.parse(capturedPointsForPose).length !== 0)}
+                  disabled={!(isValidJson(`[${capturedPointsForPose.slice(0,-1)}]`) && JSON.parse(`[${capturedPointsForPose.slice(0,-1)}]`).length !== 0)}
                   onClick={() => {
-                    calculateCameraPose(JSON.parse(capturedPointsForPose))
+                    calculateCameraPose(JSON.parse(`[${capturedPointsForPose.slice(0,-1)}]`))
                   }}>
-                  Calculate Camera Pose with {isValidJson(capturedPointsForPose) ? JSON.parse(capturedPointsForPose).length : 0} points
+                  Calculate Camera Pose with {isValidJson(`[${capturedPointsForPose.slice(0,-1)}]`) ? JSON.parse(`[${capturedPointsForPose.slice(0,-1)}]`).length : 0} points
                 </Button>
               </Col>
             </Row>
@@ -205,14 +208,14 @@ export default function App() {
               <Col>
                 <Button
                   size='sm' 
-                  variant={liveMocap ? "outline-danger" : "outline-primary"}
+                  variant={isTriangulatingPoints ? "outline-danger" : "outline-primary"}
                   disabled={!cameraStreamRunning}
                   onClick={() => {
-                    setCapturingPointsForPose(!liveMocap);
-                    startLiveMocap(liveMocap ? "stop" : "start");
+                    setIsTriangulatingPoints(!isTriangulatingPoints);
+                    startLiveMocap(isTriangulatingPoints ? "stop" : "start");
                   }
                 }>
-                  {liveMocap ? "Stop" : "Start"}
+                  {isTriangulatingPoints ? "Stop" : "Start"}
                 </Button>
               </Col>
             </Row>
@@ -229,7 +232,7 @@ export default function App() {
             </Row>
             <Row>
               <Col>
-                <SceneViewer cameras={rotationMatrix ? [{R: [[1,0,0],[0,1,0],[0,0,1]], t: [0,0,0]}, {R: rotationMatrix, t: translationMatrix!}] : []}/>
+                <SceneViewer cameras={rotationMatrix ? [{R: [[1,0,0],[0,1,0],[0,0,1]], t: [0,0,0]}, {R: rotationMatrix, t: translationMatrix!}] : []} socket={socket}/>
               </Col>
             </Row>
           </Card>

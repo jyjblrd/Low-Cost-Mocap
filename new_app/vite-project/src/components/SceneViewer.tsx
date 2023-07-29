@@ -1,10 +1,8 @@
-import React from 'react';
-import dynamic from "next/dynamic";
 import Plot from 'react-plotly.js';
-import math, { Matrix, matrix, multiply, subtract, transpose } from 'mathjs'
+import math, { matrix, multiply, transpose } from 'mathjs'
+import { useEffect, useState } from 'react';
 
-export default function SceneViewer({ cameras }: {cameras: Array<{R: Array<Array<number>>, t: Array<number>}>}) {
-  console.log(cameras)
+export default function SceneViewer({ cameras, socket }: {cameras: Array<{R: Array<Array<number>>, t: Array<number>}>, socket: Socket<DefaultEventsMap, DefaultEventsMap>}) {
   const unpack = (rows: Array<Array<number>>, key: number) => rows.map(row => row[key])
 
   const cameraPyramid = [
@@ -22,7 +20,7 @@ export default function SceneViewer({ cameras }: {cameras: Array<{R: Array<Array
     [1,1,1]
   ]
 
-  const cameraPyramids = cameras.map(({R, t}) => {
+  const cameraPyramids: object[] = cameras.map(({R, t}) => {
     let transformationMatrix = matrix([
       R[0].concat(t[0]),
       R[1].concat(t[1]),
@@ -60,19 +58,47 @@ export default function SceneViewer({ cameras }: {cameras: Array<{R: Array<Array
         opacity: 0.8},
       type: 'scatter3d'}
   })
+  
+  const [objectPointData, setObjectPointData] = useState({
+    x: [] as number[], 
+    y: [] as number[], 
+    z: [] as number[],
+    mode: 'markers',
+    marker: {
+      color: 'rgb(127, 127, 127)',
+      size: 3,
+      symbol: 'circle',
+      opacity: 0.8},
+    type: 'scatter3d'
+  })
+  const [count, setCount] = useState(0)
 
-  const data = cameraPyramids 
-  console.log(data)
+  socket.on("object-point", (data: Array<number>) => {
+    // objectPointData.x.push(data[0])
+    // objectPointData.y.push(data[1])
+    // objectPointData.z.push(data[2])
+    objectPointData.x = [data[0]]
+    objectPointData.y = [data[1]]
+    objectPointData.z = [data[2]]
+    setObjectPointData(objectPointData)
+    setCount(count+1)
+  })
 
   return (
+    <>
     <Plot
-      data={data}
+      data={cameraPyramids.concat(objectPointData)}
       layout={{
         width: window.innerWidth-80, 
         height: window.innerWidth*0.6, 
-        title: 'A Fancy Plot',
+        title: count,
         autosize: true,
         scene: {
+            aspectratio: {
+                x: 1,
+                y: 1,
+                z: 1
+            },
             xaxis: {
                 zeroline: false,
                 range: [-1,1]
@@ -88,5 +114,6 @@ export default function SceneViewer({ cameras }: {cameras: Array<{R: Array<Array
         },
       }}
     />
+    </>
   );
 }

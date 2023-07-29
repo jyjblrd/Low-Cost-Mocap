@@ -9,13 +9,13 @@ from scipy import linalg
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-socketio = SocketIO(app, path="/api/socket.io")
+socketio = SocketIO(app, cors_allowed_origins='*')
 
 @Singleton
 class Cameras:
     def __init__(self):
         dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "../camera-params.json")
+        filename = os.path.join(dirname, "camera-params.json")
         f = open(filename)
         self.camera_params = json.load(f)
 
@@ -23,6 +23,12 @@ class Cameras:
         self.num_cameras = len(self.cameras.exposure)
 
         self.is_capturing_points = False
+
+        self.is_triangulating_points = False
+        self.r1 = None
+        self.t1 = None
+        self.r2 = None
+        self.t2 = None
     
     def edit_settings(self, exposure, gain):
         self.cameras.exposure = [exposure] * self.num_cameras
@@ -42,7 +48,11 @@ class Cameras:
                 points.append(point)
             
             if (all([point[0]] is not None and point[1] is not None for point in points)):
-                emit("captured_points", points)
+                if self.is_capturing_points and not self.is_triangulating_points:
+                    socketio.emit("image-points", points)
+                elif self.is_triangulating_points:
+                    object_point = triangulate_point(points, self.r1, self.t1, self.r2, self.t2)
+                    socketio.emit("object-point", list(object_point))
         
         return frames
 
@@ -74,6 +84,22 @@ class Cameras:
 
     def stop_capturing_points(self):
         self.is_capturing_points = False
+
+    def start_trangulating_points(self, r1, t1, r2, t2):
+        self.is_capturing_points = True
+        self.is_triangulating_points = True
+        self.r1 = r1
+        self.t1 = t1
+        self.r2 = r2
+        self.t2 = t2
+
+    def stop_trangulating_points(self):
+        self.is_capturing_points = False
+        self.is_triangulating_points = False
+        self.r1 = None
+        self.t1 = None
+        self.r2 = None
+        self.t2 = None
     
     def get_camera_params(self, camera_num):
         return {
@@ -97,59 +123,59 @@ def camera_stream():
 
     return Response(gen(cameras), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# @socketio.on("update-camera-settings")
-# def change_camera_settings(data):
-#     cameras = Cameras.instance()
+@socketio.on("update-camera-settings")
+def change_camera_settings(data):
+    cameras = Cameras.instance()
     
-#     cameras.edit_settings(data["exposure"], data["gain"])
+    cameras.edit_settings(data["exposure"], data["gain"])
 
-# @socketio.on("capture-points")
-# def capture_points(data):
-#     startOrStop = data["startOrStop"]
-#     cameras = Cameras.instance()
+@socketio.on("capture-points")
+def capture_points(data):
+    start_or_stop = data["startOrStop"]
+    cameras = Cameras.instance()
 
-#     if (startOrStop == "start"):
-#         cameras.start_capturing_points()
-#         return
-#     elif (startOrStop == "stop"):
-#         captured_points = cameras.stop_capturing_points()
-#         return json.dumps(captured_points)
+    if (start_or_stop == "start"):
+        cameras.start_capturing_points()
+        return
+    elif (start_or_stop == "stop"):
+        cameras.stop_capturing_points()
 
-# @socketio.on("calculate-camera-pose")
-# def calculate_camera_pose(data):
-#     cameras = Cameras.instance()
-#     camera_points = np.array(data["cameraPoints"])
+@socketio.on("calculate-camera-pose")
+def calculate_camera_pose(data):
+    cameras = Cameras.instance()
+    camera_points = np.array(data["cameraPoints"])
 
-#     pts1 = camera_points[:,0]
-#     pts2 = camera_points[:,1] 
+    pts1 = camera_points[:,0]
+    pts2 = camera_points[:,1] 
 
-#     F, _ = cv.findFundamentalMat(pts1, pts2, cv.FM_RANSAC)
-#     print(F, flush=True)
-#     print(cameras.get_camera_params(0)["intrinsic_matrix"], flush=True)
-#     E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
-#     possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
+    F, _ = cv.findFundamentalMat(pts1, pts2, cv.FM_RANSAC)
+    print(F, flush=True)
+    print(cameras.get_camera_params(0)["intrinsic_matrix"], flush=True)
+    E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
+    possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
 
-#     R = None
-#     t = None
-#     max_points_infront_of_camera = 0
-#     for i in range(0, 4):
-#         object_points = triangulate_points(camera_points[:100], np.eye(3), np.zeros(3, dtype=np.float32), possible_Rs[i], possible_ts[i])
-#         object_points_camera_2_coordinate_frame = np.array([possible_Rs[i].T @ object_point for object_point in object_points])
+    R = None
+    t = None
+    max_points_infront_of_camera = 0
+    for i in range(0, 4):
+        object_points = triangulate_points(camera_points[:100], np.eye(3), np.zeros(3, dtype=np.float32), possible_Rs[i], possible_ts[i])
+        object_points_camera_2_coordinate_frame = np.array([possible_Rs[i].T @ object_point for object_point in object_points])
 
-#         points_infront_of_camera = np.sum(object_points[:,2] > 0) + np.sum(object_points_camera_2_coordinate_frame[:,2] > 0)
+        points_infront_of_camera = np.sum(object_points[:,2] > 0) + np.sum(object_points_camera_2_coordinate_frame[:,2] > 0)
 
-#         if points_infront_of_camera > max_points_infront_of_camera:
-#             max_points_infront_of_camera = points_infront_of_camera
-#             R = possible_Rs[i]
-#             t = possible_ts[i]
+        if points_infront_of_camera > max_points_infront_of_camera:
+            max_points_infront_of_camera = points_infront_of_camera
+            R = possible_Rs[i]
+            t = possible_ts[i]
 
-#     res = json.dumps({
-#         "R": R.tolist(),
-#         "t": t.tolist()
-#     })
-#     return res, 200
+    res = {
+        "R": R.tolist(),
+        "t": t.tolist()
+    }
     
-def triangulate_points(image_points, r1, t1, r2, t2):
+    socketio.emit("camera-pose", res)
+    
+def triangulate_point(image_point, r1, t1, r2, t2):
     cameras = Cameras.instance()
 
     RT1 = np.c_[r1, t1]
@@ -172,14 +198,31 @@ def triangulate_points(image_points, r1, t1, r2, t2):
         U, s, Vh = linalg.svd(B, full_matrices = False)
 
         return Vh[3,0:3]/Vh[3,3]
-    
+
+    return DLT(P1, P2, image_point[0], image_point[1])
+
+def triangulate_points(image_points, r1, t1, r2, t2):
     object_points = []
-    for image_points_1, image_points_2 in image_points:
-        object_points.append(DLT(P1, P2, image_points_1, image_points_2))
-    object_points = np.array(object_points)
+    for image_point in image_points:
+        object_point = triangulate_point(image_point, r1, t1, r2, t2)
+        object_points.append(object_point)
+    
+    return np.array(object_points)
 
-    return object_points
+@socketio.on("triangulate-points")
+def live_mocap(data):
+    cameras = Cameras.instance()
+    start_or_stop = data["startOrStop"]
+    r1 = data["r1"]
+    t1 = data["t1"]
+    r2 = data["r2"]
+    t2 = data["t2"]
 
+    if (start_or_stop == "start"):
+        cameras.start_trangulating_points(r1, t1, r2, t2)
+        return
+    elif (start_or_stop == "stop"):
+        cameras.stop_trangulating_points()
 
         
 if __name__ == '__main__':
