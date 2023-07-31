@@ -1,15 +1,17 @@
 "use client";
 
-import { FormEventHandler, useState, createRef, Ref } from 'react';
+import { FormEventHandler, useState, createRef, Ref, useRef, useEffect } from 'react';
 import { Button, Card, Col, Container, Row } from 'react-bootstrap';
 import Toolbar from './components/Toolbar';
 import Form from 'react-bootstrap/Form';
 import { Tooltip } from 'react-tooltip'
-import SceneViewer from './components/SceneViewer';
+import CameraWireframe from './components/CameraWireframe';
 import { io } from 'socket.io-client';
-
-const socket = io("http://localhost:3001");
-console.log(socket)
+import { Canvas, useFrame } from '@react-three/fiber'
+import { Stats, OrbitControls } from '@react-three/drei'
+import Points from './components/Points';
+import { socket } from './shared/styles/scripts/socket';
+import { matrix, mean, multiply } from 'mathjs';
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -21,10 +23,12 @@ export default function App() {
   const [capturedPointsForPose, setCapturedPointsForPose] = useState("");
   
   const [isTriangulatingPoints, setIsTriangulatingPoints] = useState(false);
-  const [objectPoints, setObjectPoints] = useState([]);
 
-  const [rotationMatrix, setRotationMatrix] = useState<Array<Array<number>>>()
-  const [translationMatrix, setTranslationMatrix] = useState<Array<number>>()
+  const objectPoints = useRef<Array<Array<number>>>([])
+  const objectPointErrors = useRef<Array<number>>([])
+  const [objectPointCount, setObjectPointCount] = useState(0);
+
+  const [cameraPoses, setCameraPoses] = useState<Array<object>>([])
 
   const updateCameraSettings: FormEventHandler = (e) => {
     e.preventDefault()
@@ -41,27 +45,43 @@ export default function App() {
     socket.emit("capture-points", { startOrStop })
   }
 
-  socket.on("image-points", (data) => {
-    if (capturingPointsForPose) {
+  useEffect(() => {
+    socket.on("image-points", (data) => {
       setCapturedPointsForPose(`${capturedPointsForPose}${JSON.stringify(data)},`)
-    }
-  })
+    })
 
-  socket.on("object-point", (data) => {
-    if (isTriangulatingPoints) {
-      objectPoints.push(data)
-      setObjectPoints(objectPoints)
+    return () => {
+      socket.off("image-points")
     }
-  })
+  }, [capturedPointsForPose])
+
+  useEffect(() => {
+    socket.on("object-point", (data) => {
+      const rotated_point = multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), data["object_point"])._data
+      objectPoints.current.push(rotated_point)
+      objectPointErrors.current.push(data["error"])
+      setObjectPointCount(objectPointCount+1)
+    })
+
+    return () => {
+      socket.off("object-point")
+    }
+  }, [objectPointCount])
+
+  useEffect(() => {
+    socket.on("camera-pose", data => {
+      console.log(data["error"])
+      setCameraPoses(data["camera_poses"])
+    })
+
+    return () => {
+      socket.off("camera-pose")
+    }
+  }, [])
 
   const calculateCameraPose = async (cameraPoints: Array<Array<Array<number>>>) => {
     socket.emit("calculate-camera-pose", { cameraPoints })
   }
-
-  socket.on("camera-pose", ({R, t}) => {
-    setRotationMatrix(R)
-    setTranslationMatrix(t)
-  })
 
   const isValidJson = (str: string) => {
     try {
@@ -74,11 +94,7 @@ export default function App() {
   }
 
   const startLiveMocap = (startOrStop: string) => {
-    let r1 = [[1,0,0],[0,1,0],[0,0,1]]
-    let t1 = [0,0,0]
-    let r2 = rotationMatrix
-    let t2 = translationMatrix
-    socket.emit("triangulate-points", { startOrStop, r1, t1, r2, t2 })
+    socket.emit("triangulate-points", { startOrStop, cameraPoses })
   }
 
   return (
@@ -189,14 +205,6 @@ export default function App() {
                 </Button>
               </Col>
             </Row>
-            <Row className='pt-3'>
-              <Col>
-                <h6>Rotation Matrix</h6>
-                {rotationMatrix}
-                <h6>Translation Matrix</h6>
-                {translationMatrix}
-              </Col>
-            </Row>
           </Card>
         </Col>
         <Col xs="4">
@@ -211,6 +219,10 @@ export default function App() {
                   variant={isTriangulatingPoints ? "outline-danger" : "outline-primary"}
                   disabled={!cameraStreamRunning}
                   onClick={() => {
+                    if (!isTriangulatingPoints) {
+                      objectPoints.current = []
+                      objectPointErrors.current = []
+                    }
                     setIsTriangulatingPoints(!isTriangulatingPoints);
                     startLiveMocap(isTriangulatingPoints ? "stop" : "start");
                   }
@@ -227,12 +239,19 @@ export default function App() {
           <Card className='shadow-sm p-3'>
             <Row>
               <Col xs="auto">
-                <h4>Scene Viewer</h4>
+                <h4>Scene Viewer {objectPointErrors.current.length !== 0 ? mean(objectPointErrors.current) : ""}</h4>
               </Col>
             </Row>
             <Row>
-              <Col>
-                <SceneViewer cameras={rotationMatrix ? [{R: [[1,0,0],[0,1,0],[0,0,1]], t: [0,0,0]}, {R: rotationMatrix, t: translationMatrix!}] : []} socket={socket}/>
+              <Col style={{height: "1000px"}}>
+                <Canvas>
+                  <ambientLight/>
+                  {cameraPoses.map(({R, t}, i) => (
+                    <CameraWireframe R={R} t={t} key={i}/>
+                  ))}
+                  <Points objectPoints={objectPoints} objectPointErrors={objectPointErrors} count={objectPointCount}/>
+                  <OrbitControls />
+                </Canvas>
               </Col>
             </Row>
           </Card>

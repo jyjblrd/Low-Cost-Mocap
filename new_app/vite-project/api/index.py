@@ -5,8 +5,9 @@ import numpy as np
 import json
 import os
 from helpers import Singleton
-from scipy import linalg
+from scipy import linalg, optimize
 from flask_socketio import SocketIO, emit
+from scipy.spatial.transform import Rotation
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins='*')
@@ -25,10 +26,7 @@ class Cameras:
         self.is_capturing_points = False
 
         self.is_triangulating_points = False
-        self.r1 = None
-        self.t1 = None
-        self.r2 = None
-        self.t2 = None
+        self.camera_poses = None
     
     def edit_settings(self, exposure, gain):
         self.cameras.exposure = [exposure] * self.num_cameras
@@ -51,8 +49,9 @@ class Cameras:
                 if self.is_capturing_points and not self.is_triangulating_points:
                     socketio.emit("image-points", points)
                 elif self.is_triangulating_points:
-                    object_point = triangulate_point(points, self.r1, self.t1, self.r2, self.t2)
-                    socketio.emit("object-point", list(object_point))
+                    object_point = triangulate_point(points, self.camera_poses)
+                    error = calculate_reprojection_errors(np.array([points]), np.array([object_point]), self.camera_poses)[0]
+                    socketio.emit("object-point", {"object_point": list(object_point), "error": error})
         
         return frames
 
@@ -85,21 +84,15 @@ class Cameras:
     def stop_capturing_points(self):
         self.is_capturing_points = False
 
-    def start_trangulating_points(self, r1, t1, r2, t2):
+    def start_trangulating_points(self, camera_poses):
         self.is_capturing_points = True
         self.is_triangulating_points = True
-        self.r1 = r1
-        self.t1 = t1
-        self.r2 = r2
-        self.t2 = t2
+        self.camera_poses = camera_poses
 
     def stop_trangulating_points(self):
         self.is_capturing_points = False
         self.is_triangulating_points = False
-        self.r1 = None
-        self.t1 = None
-        self.r2 = None
-        self.t2 = None
+        self.camera_poses = None
     
     def get_camera_params(self, camera_num):
         return {
@@ -143,68 +136,129 @@ def capture_points(data):
 @socketio.on("calculate-camera-pose")
 def calculate_camera_pose(data):
     cameras = Cameras.instance()
-    camera_points = np.array(data["cameraPoints"])
+    image_points = np.array(data["cameraPoints"])
+    image_points_t = image_points.transpose((1, 0, 2))
 
-    pts1 = camera_points[:,0]
-    pts2 = camera_points[:,1] 
+    camera_poses = [{
+        "R": np.eye(3),
+        "t": np.array([[0],[0],[0]], dtype=np.float32)
+    }]
+    for camera_i in range(0, cameras.num_cameras-1):
+        F, _ = cv.findFundamentalMat(image_points_t[camera_i], image_points_t[camera_i+1], cv.FM_RANSAC)
+        E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
+        possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
 
-    F, _ = cv.findFundamentalMat(pts1, pts2, cv.FM_RANSAC)
-    print(F, flush=True)
-    print(cameras.get_camera_params(0)["intrinsic_matrix"], flush=True)
-    E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
-    possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
+        R = None
+        t = None
+        max_points_infront_of_camera = 0
+        for i in range(0, 4):
+            object_points = triangulate_points(image_points[:,camera_i:camera_i+2,:], np.concatenate([[camera_poses[-1]], [{"R": possible_Rs[i], "t": possible_ts[i]}]]))
+            object_points_camera_coordinate_frame = np.array([possible_Rs[i].T @ object_point for object_point in object_points])
 
-    R = None
-    t = None
-    max_points_infront_of_camera = 0
-    for i in range(0, 4):
-        object_points = triangulate_points(camera_points[:100], np.eye(3), np.zeros(3, dtype=np.float32), possible_Rs[i], possible_ts[i])
-        object_points_camera_2_coordinate_frame = np.array([possible_Rs[i].T @ object_point for object_point in object_points])
+            points_infront_of_camera = np.sum(object_points[:,2] > 0) + np.sum(object_points_camera_coordinate_frame[:,2] > 0)
 
-        points_infront_of_camera = np.sum(object_points[:,2] > 0) + np.sum(object_points_camera_2_coordinate_frame[:,2] > 0)
+            if points_infront_of_camera > max_points_infront_of_camera:
+                max_points_infront_of_camera = points_infront_of_camera
+                R = possible_Rs[i]
+                t = possible_ts[i]
 
-        if points_infront_of_camera > max_points_infront_of_camera:
-            max_points_infront_of_camera = points_infront_of_camera
-            R = possible_Rs[i]
-            t = possible_ts[i]
+        R = camera_poses[-1]["R"] @ R
+        t = camera_poses[-1]["t"] + t
 
-    res = {
-        "R": R.tolist(),
-        "t": t.tolist()
-    }
+        camera_poses.append({
+            "R": R,
+            "t": t
+        })
+
+    camera_poses = bundle_adjustment(image_points, camera_poses)
+
+    object_points = triangulate_points(image_points, camera_poses)
+    error = np.mean(calculate_reprojection_errors(image_points, object_points, camera_poses))
+
+    for i in range(0, len(camera_poses)):
+        camera_poses[i] = {k: v.tolist() for (k, v) in camera_poses[i].items()}
     
-    socketio.emit("camera-pose", res)
+    socketio.emit("camera-pose", {"error": error, "camera_poses": camera_poses})
+
+def calculate_reprojection_errors(image_points, object_points, camera_poses):
+    cameras = Cameras.instance()
+    image_points_t = image_points.transpose((1, 0, 2))
+
+    errors = np.array([])
+    for i, camera_pose in enumerate(camera_poses):
+        projected_img_points, _ = cv.projectPoints(object_points, np.array(camera_pose["R"], dtype=np.float64), np.array(camera_pose["t"], dtype=np.float64), cameras.get_camera_params(i)["intrinsic_matrix"], cameras.get_camera_params(i)["distortion_coef"])
+        projected_img_points = projected_img_points[:,0,:]
+        errors = np.concatenate([errors, (image_points_t[i]-projected_img_points).flatten() ** 2])
+
+    return errors
+
+def bundle_adjustment(image_points, camera_poses):
+    def params_to_camera_poses(params):
+        num_cameras = int(params.size/6)+1
+        camera_poses = [{
+            "R": np.eye(3),
+            "t": np.array([0,0,0], dtype=np.float32)
+        }]
+        for i in range(0, num_cameras-1):
+            camera_poses.append({
+                "R": Rotation.as_matrix(Rotation.from_rotvec(params[i*6 : i*6 + 3])),
+                "t": params[i*6 + 3 : i*6 + 6]
+            })
+        
+        return camera_poses
+
+    def residual_function(params):
+        camera_poses = params_to_camera_poses(params)
+        object_points = triangulate_points(image_points, camera_poses)
+        errors = calculate_reprojection_errors(image_points, object_points, camera_poses)
+
+        return errors
+
+    init_params = np.array([])
+    for camera_pose in camera_poses[1:]:
+        rot_vec = Rotation.as_rotvec(Rotation.from_matrix(camera_pose["R"])).flatten()
+        init_params = np.concatenate([init_params, rot_vec]) if init_params.size else rot_vec
+        init_params = np.concatenate([init_params, camera_pose["t"].flatten()])
+
+    res = optimize.least_squares(
+        residual_function, init_params, verbose=2, ftol=1e-5
+    )
+
+    return params_to_camera_poses(res.x)
     
-def triangulate_point(image_point, r1, t1, r2, t2):
+def triangulate_point(image_point, camera_poses):
     cameras = Cameras.instance()
 
-    RT1 = np.c_[r1, t1]
-    P1 = cameras.camera_params[0]["intrinsic_matrix"] @ RT1 #projection matrix for camera 1
+    Ps = [] # projection matricies
 
-    RT2 = np.c_[r2, t2]
-    P2 = cameras.camera_params[1]["intrinsic_matrix"] @ RT2 #projection matrix for camera 2
+    for i, camera_pose in enumerate(camera_poses):
+        RT = np.c_[camera_pose["R"], camera_pose["t"]]
+        P = cameras.camera_params[i]["intrinsic_matrix"] @ RT
+        Ps.append(P)
 
     # https://temugeb.github.io/computer_vision/2021/02/06/direct-linear-transorms.html
-    def DLT(P1, P2, point1, point2):
+    def DLT(Ps, image_point):
+        A = []
 
-        A = [point1[1]*P1[2,:] - P1[1,:],
-            P1[0,:] - point1[0]*P1[2,:],
-            point2[1]*P2[2,:] - P2[1,:],
-            P2[0,:] - point2[0]*P2[2,:]
-            ]
-        A = np.array(A).reshape((4,4))
-
+        for P, image_point in zip(Ps, image_point):
+            A.append(image_point[1]*P[2,:] - P[1,:])
+            A.append(P[0,:] - image_point[0]*P[2,:])
+            
+        A = np.array(A).reshape((len(Ps)*2,4))
         B = A.transpose() @ A
         U, s, Vh = linalg.svd(B, full_matrices = False)
+        object_point = Vh[3,0:3]/Vh[3,3]
 
-        return Vh[3,0:3]/Vh[3,3]
+        return object_point
 
-    return DLT(P1, P2, image_point[0], image_point[1])
+    object_point = DLT(Ps, image_point)
 
-def triangulate_points(image_points, r1, t1, r2, t2):
+    return object_point
+
+def triangulate_points(image_points, camera_poses):
     object_points = []
     for image_point in image_points:
-        object_point = triangulate_point(image_point, r1, t1, r2, t2)
+        object_point = triangulate_point(image_point, camera_poses)
         object_points.append(object_point)
     
     return np.array(object_points)
@@ -213,13 +267,10 @@ def triangulate_points(image_points, r1, t1, r2, t2):
 def live_mocap(data):
     cameras = Cameras.instance()
     start_or_stop = data["startOrStop"]
-    r1 = data["r1"]
-    t1 = data["t1"]
-    r2 = data["r2"]
-    t2 = data["t2"]
+    camera_poses = data["cameraPoses"]
 
     if (start_or_stop == "start"):
-        cameras.start_trangulating_points(r1, t1, r2, t2)
+        cameras.start_trangulating_points(camera_poses)
         return
     elif (start_or_stop == "stop"):
         cameras.stop_trangulating_points()
