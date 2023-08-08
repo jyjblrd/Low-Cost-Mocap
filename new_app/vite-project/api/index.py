@@ -1,5 +1,6 @@
 from flask import Flask, Response, request
 from pseyepy import Camera, Stream
+import math
 import cv2 as cv
 import numpy as np
 import json
@@ -43,15 +44,15 @@ class Cameras:
             image_points = []
             for i in range(0, self.num_cameras):
                 frames[i], single_camera_image_points = self._find_dot(frames[i])
-                image_points.append(single_camera_image_points[0])
+                image_points.append(single_camera_image_points)
+            #image_points = numpy_fillna(image_points)
             
-            if (any(point != [None,None] for point in image_points)):
+            if (any(np.all(point[0] != [None,None]) for point in image_points)):
                 if self.is_capturing_points and not self.is_triangulating_points:
-                    socketio.emit("image-points", image_points)
+                    socketio.emit("image-points", [x[0] for x in image_points])
                 elif self.is_triangulating_points:
-                    object_point = triangulate_point(image_points, self.camera_poses)
-                    error = calculate_reprojection_errors(np.array([image_points]), np.array([object_point]), self.camera_poses)[0]
-                    socketio.emit("object-point", {"object_point": list(object_point), "error": error})
+                    errors, object_points = find_point_correspondance_and_object_points(image_points, self.camera_poses)
+                    socketio.emit("object-point", {"object_point": object_points.tolist(), "errors": errors.tolist()})
         
         return frames
 
@@ -193,26 +194,35 @@ def calculate_camera_pose(data):
 def calculate_reprojection_errors(image_points, object_points, camera_poses):
     errors = np.array([])
     for image_points_i, object_point in zip(image_points, object_points):
-        errors = np.concatenate([errors, calculate_reprojection_error(image_points_i, object_point, camera_poses)])
+        error = calculate_reprojection_error(image_points_i, object_point, camera_poses)
+        if error is None:
+            continue
+        errors = np.concatenate([errors, [error]])
 
     return errors
 
 def calculate_reprojection_error(image_points, object_point, camera_poses):
     cameras = Cameras.instance()
 
+    image_points = np.array(image_points)
     none_indicies = np.where(np.all(image_points == None, axis=1))[0]
     image_points = np.delete(image_points, none_indicies, axis=0)
     camera_poses = np.delete(camera_poses, none_indicies, axis=0)
+
+    if len(image_points) <= 1:
+        return None
 
     image_points_t = image_points.transpose((0,1))
 
     errors = np.array([])
     for i, camera_pose in enumerate(camera_poses):
-        projected_img_points, _ = cv.projectPoints(np.expand_dims(object_point, axis=0), np.array(camera_pose["R"], dtype=np.float64), np.array(camera_pose["t"], dtype=np.float64), cameras.get_camera_params(i)["intrinsic_matrix"], cameras.get_camera_params(i)["distortion_coef"])
+        if np.all(image_points[i] == None, axis=0):
+            continue
+        projected_img_points, _ = cv.projectPoints(np.expand_dims(object_point, axis=0).astype(np.float32), np.array(camera_pose["R"], dtype=np.float64), np.array(camera_pose["t"], dtype=np.float64), cameras.get_camera_params(i)["intrinsic_matrix"], cameras.get_camera_params(i)["distortion_coef"])
         projected_img_point = projected_img_points[:,0,:][0]
         errors = np.concatenate([errors, (image_points_t[i]-projected_img_point).flatten() ** 2])
-
-    return errors
+    
+    return errors.mean()
 
 
 def bundle_adjustment(image_points, camera_poses):
@@ -251,11 +261,15 @@ def bundle_adjustment(image_points, camera_poses):
     return params_to_camera_poses(res.x)
     
 def triangulate_point(image_points, camera_poses):
+    image_points = np.array(image_points)
     cameras = Cameras.instance()
 
     none_indicies = np.where(np.all(image_points == None, axis=1))[0]
     image_points = np.delete(image_points, none_indicies, axis=0)
     camera_poses = np.delete(camera_poses, none_indicies, axis=0)
+
+    if len(image_points) <= 1:
+        return [None, None, None]
 
     Ps = [] # projection matricies
 
@@ -294,8 +308,14 @@ def triangulate_points(image_points, camera_poses):
 def find_point_correspondance_and_object_points(image_points, camera_poses):
     cameras = Cameras.instance()
 
-    correspondances = [] # [object_points, possible image_point groups, image_point from camera]
-    correspondances = [np.array([i]) for i in range(0, len(image_points[0]))]
+    for image_points_i in image_points:
+        try:
+            image_points_i.remove([None, None])
+        except:
+            pass
+
+    # [object_points, possible image_point groups, image_point from camera]
+    correspondances = [[[i]] for i in image_points[0]]
 
     Ps = [] # projection matricies
     for i, camera_pose in enumerate(camera_poses):
@@ -309,36 +329,50 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
         epipolar_lines = []
         for root_image_point in root_image_points:
             F = cv.sfm.fundamentalFromProjections(Ps[root_image_point["camera"]], Ps[i])
-            epipolar_lines.append(cv.computeCorrespondEpilines(root_image_point["point"], 2, F)[0])
+            epipolar_lines.append(cv.computeCorrespondEpilines(np.array([root_image_point["point"]], dtype=np.float32), 2, F)[0,0].tolist())
 
         unmatched_image_points = np.array(image_points[i])
-        points = image_points[i]
-        for j, (a, b, c) in enumerate(epipolar_lines):
-            distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
+        points = np.array(image_points[i])
+
+        for j, [a, b, c] in enumerate(epipolar_lines):
+            distances_to_line = np.array([])
+            if len(points) != 0:
+                distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
             possible_matches = distances_to_line[distances_to_line < 5]
-            unmatched_image_points = unmatched_image_points[~(unmatched_image_points==possible_matches).all(axis=1)] # basically just subtracting 
     
             if len(possible_matches) == 0:
-                vertical_vector = np.full(len(correspondances[j]), None).T
-                correspondances[j] = np.hstack([correspondances[j], vertical_vector])
+                for possible_group in correspondances[j]:
+                    possible_group.append([None, None])
             else:
-                new_correspondances_j = np.array([])
+                unmatched_image_points = unmatched_image_points[~(unmatched_image_points==possible_matches).all(axis=1)] # basically just subtracting 
+                new_correspondances_j = []
                 for possible_match in possible_matches:
-                    vertical_vector = np.full(len(correspondances[j]), possible_match).T
-                    new_correspondances_j = np.concatenate([new_correspondances_j, np.hstack([np.array(correspondances[j]), vertical_vector])])
+                    temp = correspondances[j].copy()
+                    for possible_group in correspondances[j]:
+                        temp.append(possible_match)
+                    new_correspondances_j += temp
                 correspondances[j] = new_correspondances_j
 
         for unmatched_image_point in unmatched_image_points:
             root_image_points.append({"camera": i, "point": unmatched_image_point})
+            temp = [[[None, None]] * i]
+            temp[0].append(unmatched_image_point.tolist())
+            correspondances.append(temp)
 
     object_points = []
+    errors = []
+    print(correspondances)
     for image_points in correspondances:
         object_points_i = triangulate_points(image_points, camera_poses)
-        errors = calculate_reprojection_errors(image_points, object_points_i, camera_poses)
+        errors_i = calculate_reprojection_errors(image_points, object_points_i, camera_poses)
+        # print(errors_i)
+        # print(object_points_i)
+        print("\n\n")
 
-        object_points.append(object_points_i[np.argmin(errors)])
+        object_points.append(object_points_i[np.argmin(errors_i)])
+        errors.append(np.min(errors_i))
 
-    return object_points
+    return np.array(errors), np.array(object_points)
 
 
 @socketio.on("triangulate-points")
@@ -353,6 +387,19 @@ def live_mocap(data):
     elif (start_or_stop == "stop"):
         cameras.stop_trangulating_points()
 
+def numpy_fillna(data):
+    data = np.array(data, dtype=object)
+    # Get lengths of each row of data
+    lens = np.array([len(i) for i in data])
+
+    # Mask of valid places in each row
+    mask = np.arange(lens.max()) < lens[:,None]
+
+    # Setup output array and put elements from data into masked positions
+    out = np.full((mask.shape[0], mask.shape[1], 2), [None, None])
+    out[mask] = np.concatenate(data)
+    return out
         
+
 if __name__ == '__main__':
     socketio.run(app, port=3001, debug=True)
