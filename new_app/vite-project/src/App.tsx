@@ -57,9 +57,9 @@ export default function App() {
 
   useEffect(() => {
     socket.on("object-point", (data) => {
-      const rotated_point = multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), data["object_point"])._data
-      objectPoints.current.push(rotated_point)
-      objectPointErrors.current.push(data["error"])
+      const rotated_point = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      objectPoints.current = objectPoints.current.concat(rotated_point)
+      objectPointErrors.current = objectPointErrors.current.concat(data["errors"])
       setObjectPointCount(objectPointCount+1)
     })
 

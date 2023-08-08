@@ -9,6 +9,7 @@ from helpers import Singleton
 from scipy import linalg, optimize
 from flask_socketio import SocketIO, emit
 from scipy.spatial.transform import Rotation
+import copy
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins='*')
@@ -52,7 +53,7 @@ class Cameras:
                     socketio.emit("image-points", [x[0] for x in image_points])
                 elif self.is_triangulating_points:
                     errors, object_points = find_point_correspondance_and_object_points(image_points, self.camera_poses)
-                    socketio.emit("object-point", {"object_point": object_points.tolist(), "errors": errors.tolist()})
+                    socketio.emit("object-point", {"object_points": object_points.tolist(), "errors": errors.tolist()})
         
         return frames
 
@@ -255,7 +256,7 @@ def bundle_adjustment(image_points, camera_poses):
         init_params = np.concatenate([init_params, camera_pose["t"].flatten()])
 
     res = optimize.least_squares(
-        residual_function, init_params, verbose=2, ftol=1e-9
+        residual_function, init_params, verbose=2, ftol=1e-2
     )
 
     return params_to_camera_poses(res.x)
@@ -263,7 +264,6 @@ def bundle_adjustment(image_points, camera_poses):
 def triangulate_point(image_points, camera_poses):
     image_points = np.array(image_points)
     cameras = Cameras.instance()
-
     none_indicies = np.where(np.all(image_points == None, axis=1))[0]
     image_points = np.delete(image_points, none_indicies, axis=0)
     camera_poses = np.delete(camera_poses, none_indicies, axis=0)
@@ -338,18 +338,21 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
             distances_to_line = np.array([])
             if len(points) != 0:
                 distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
-            possible_matches = distances_to_line[distances_to_line < 5]
+            #print(distances_to_line)
+            possible_matches = points[distances_to_line < 15]
     
             if len(possible_matches) == 0:
                 for possible_group in correspondances[j]:
                     possible_group.append([None, None])
             else:
-                unmatched_image_points = unmatched_image_points[~(unmatched_image_points==possible_matches).all(axis=1)] # basically just subtracting 
+                print(unmatched_image_points)
+                print(possible_matches)
+                unmatched_image_points = unmatched_image_points[~(np.isin(unmatched_image_points, possible_matches).all(axis=1))] # basically just subtracting 
                 new_correspondances_j = []
                 for possible_match in possible_matches:
-                    temp = correspondances[j].copy()
-                    for possible_group in correspondances[j]:
-                        temp.append(possible_match)
+                    temp = copy.deepcopy(correspondances[j])
+                    for possible_group in temp:
+                        possible_group.append(possible_match.tolist())
                     new_correspondances_j += temp
                 correspondances[j] = new_correspondances_j
 
@@ -361,13 +364,13 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
 
     object_points = []
     errors = []
-    print(correspondances)
     for image_points in correspondances:
         object_points_i = triangulate_points(image_points, camera_poses)
+
+        if np.all(object_points_i == None):
+            continue
+
         errors_i = calculate_reprojection_errors(image_points, object_points_i, camera_poses)
-        # print(errors_i)
-        # print(object_points_i)
-        print("\n\n")
 
         object_points.append(object_points_i[np.argmin(errors_i)])
         errors.append(np.min(errors_i))
