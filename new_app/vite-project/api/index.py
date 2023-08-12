@@ -18,7 +18,7 @@ socketio = SocketIO(app, cors_allowed_origins='*')
 class Cameras:
     def __init__(self):
         dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "camera-params.json")
+        filename = os.path.join(dirname, "camera-params copy.json")
         f = open(filename)
         self.camera_params = json.load(f)
 
@@ -39,6 +39,7 @@ class Cameras:
 
         for i in range(0, self.num_cameras):
             frames[i] = np.rot90(frames[i], k=self.camera_params[i]["rotation"])
+            frames[i] = cv.undistort(frames[i], self.get_camera_params(i)["intrinsic_matrix"], self.get_camera_params(i)["distortion_coef"])
             frames[i] = cv.cvtColor(frames[i], cv.COLOR_RGB2BGR)
 
         if (self.is_capturing_points):
@@ -52,7 +53,7 @@ class Cameras:
                 if self.is_capturing_points and not self.is_triangulating_points:
                     socketio.emit("image-points", [x[0] for x in image_points])
                 elif self.is_triangulating_points:
-                    errors, object_points = find_point_correspondance_and_object_points(image_points, self.camera_poses)
+                    errors, object_points, frames = find_point_correspondance_and_object_points(image_points, self.camera_poses, frames)
                     socketio.emit("object-point", {"object_points": object_points.tolist(), "errors": errors.tolist()})
         
         return frames
@@ -106,6 +107,14 @@ class Cameras:
             "distortion_coef": np.array(self.camera_params[camera_num]["distortion_coef"]),
             "rotation": self.camera_params[camera_num]["rotation"]
         }
+    
+    def set_camera_params(self, camera_num, intrinsic_matrix=None, distortion_coef=None):
+        if intrinsic_matrix is not None:
+            self.camera_params[camera_num]["intrinsic_matrix"] = intrinsic_matrix
+        
+        if distortion_coef is not None:
+            self.camera_params[camera_num]["distortion_coef"] = distortion_coef
+    
 
 
 @app.route("/api/camera-stream")
@@ -219,7 +228,13 @@ def calculate_reprojection_error(image_points, object_point, camera_poses):
     for i, camera_pose in enumerate(camera_poses):
         if np.all(image_points[i] == None, axis=0):
             continue
-        projected_img_points, _ = cv.projectPoints(np.expand_dims(object_point, axis=0).astype(np.float32), np.array(camera_pose["R"], dtype=np.float64), np.array(camera_pose["t"], dtype=np.float64), cameras.get_camera_params(i)["intrinsic_matrix"], cameras.get_camera_params(i)["distortion_coef"])
+        projected_img_points, _ = cv.projectPoints(
+            np.expand_dims(object_point, axis=0).astype(np.float32), 
+            np.array(camera_pose["R"], dtype=np.float64), 
+            np.array(camera_pose["t"], dtype=np.float64), 
+            cameras.get_camera_params(i)["intrinsic_matrix"], 
+            np.array([])
+        )
         projected_img_point = projected_img_points[:,0,:][0]
         errors = np.concatenate([errors, (image_points_t[i]-projected_img_point).flatten() ** 2])
     
@@ -227,39 +242,54 @@ def calculate_reprojection_error(image_points, object_point, camera_poses):
 
 
 def bundle_adjustment(image_points, camera_poses):
+    cameras = Cameras.instance()
+
     def params_to_camera_poses(params):
-        num_cameras = int(params.size/6)+1
+        focal_distances = []
+        num_cameras = int((params.size-1)/7)+1
         camera_poses = [{
             "R": np.eye(3),
             "t": np.array([0,0,0], dtype=np.float32)
         }]
+        focal_distances.append(params[0])
         for i in range(0, num_cameras-1):
+            focal_distances.append(params[i*7+1])
             camera_poses.append({
-                "R": Rotation.as_matrix(Rotation.from_rotvec(params[i*6 : i*6 + 3])),
-                "t": params[i*6 + 3 : i*6 + 6]
+                "R": Rotation.as_matrix(Rotation.from_rotvec(params[i*7 + 2 : i*7 + 3 + 2])),
+                "t": params[i*7 + 3 + 2 : i*7 + 6 + 2]
             })
-        
-        return camera_poses
+
+        return camera_poses, focal_distances
 
     def residual_function(params):
-        camera_poses = params_to_camera_poses(params)
+        camera_poses, focal_distances = params_to_camera_poses(params)
+        for i in range(0, len(camera_poses)):
+            intrinsic = cameras.get_camera_params(i)["intrinsic_matrix"]
+            intrinsic[0, 0] = focal_distances[i]
+            intrinsic[1, 1] = focal_distances[i]
+            #cameras.set_camera_params(i, intrinsic)
         object_points = triangulate_points(image_points, camera_poses)
         errors = calculate_reprojection_errors(image_points, object_points, camera_poses)
         errors = errors.astype(np.float32)
         
         return errors
 
-    init_params = np.array([])
-    for camera_pose in camera_poses[1:]:
+    focal_distance = cameras.get_camera_params(0)["intrinsic_matrix"][0,0]
+    print(focal_distance)
+    init_params = np.array([focal_distance])
+    for i, camera_pose in enumerate(camera_poses[1:]):
         rot_vec = Rotation.as_rotvec(Rotation.from_matrix(camera_pose["R"])).flatten()
-        init_params = np.concatenate([init_params, rot_vec]) if init_params.size else rot_vec
+        focal_distance = cameras.get_camera_params(i)["intrinsic_matrix"][0,0]
+        init_params = np.concatenate([init_params, [focal_distance]])
+        init_params = np.concatenate([init_params, rot_vec])
         init_params = np.concatenate([init_params, camera_pose["t"].flatten()])
 
     res = optimize.least_squares(
         residual_function, init_params, verbose=2, ftol=1e-2
     )
 
-    return params_to_camera_poses(res.x)
+    print(res.x)
+    return params_to_camera_poses(res.x)[0]
     
 def triangulate_point(image_points, camera_poses):
     image_points = np.array(image_points)
@@ -305,7 +335,7 @@ def triangulate_points(image_points, camera_poses):
     
     return np.array(object_points)
 
-def find_point_correspondance_and_object_points(image_points, camera_poses):
+def find_point_correspondance_and_object_points(image_points, camera_poses, frames):
     cameras = Cameras.instance()
 
     for image_points_i in image_points:
@@ -329,7 +359,9 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
         epipolar_lines = []
         for root_image_point in root_image_points:
             F = cv.sfm.fundamentalFromProjections(Ps[root_image_point["camera"]], Ps[i])
-            epipolar_lines.append(cv.computeCorrespondEpilines(np.array([root_image_point["point"]], dtype=np.float32), 2, F)[0,0].tolist())
+            line = cv.computeCorrespondEpilines(np.array([root_image_point["point"]], dtype=np.float32), 1, F)
+            epipolar_lines.append(line[0,0].tolist())
+            frames[i] = drawlines(frames[i], line[0])
 
         unmatched_image_points = np.array(image_points[i])
         points = np.array(image_points[i])
@@ -338,16 +370,13 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
             distances_to_line = np.array([])
             if len(points) != 0:
                 distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
-            #print(distances_to_line)
-            possible_matches = points[distances_to_line < 15]
+            possible_matches = points[distances_to_line < 10]
     
             if len(possible_matches) == 0:
                 for possible_group in correspondances[j]:
                     possible_group.append([None, None])
             else:
-                print(unmatched_image_points)
-                print(possible_matches)
-                unmatched_image_points = unmatched_image_points[~(np.isin(unmatched_image_points, possible_matches).all(axis=1))] # basically just subtracting 
+                unmatched_image_points = unmatched_image_points[(unmatched_image_points != points[np.argmin(distances_to_line)]).all(axis=1)] # basically just subtracting 
                 new_correspondances_j = []
                 for possible_match in possible_matches:
                     temp = copy.deepcopy(correspondances[j])
@@ -375,7 +404,7 @@ def find_point_correspondance_and_object_points(image_points, camera_poses):
         object_points.append(object_points_i[np.argmin(errors_i)])
         errors.append(np.min(errors_i))
 
-    return np.array(errors), np.array(object_points)
+    return np.array(errors), np.array(object_points), frames
 
 
 @socketio.on("triangulate-points")
@@ -403,6 +432,17 @@ def numpy_fillna(data):
     out[mask] = np.concatenate(data)
     return out
         
+
+def drawlines(img1,lines):
+    r,c,_ = img1.shape
+    for r in lines:
+        print(r)
+        color = tuple(np.random.randint(0,255,3).tolist())
+        x0,y0 = map(int, [0, -r[2]/r[1] ])
+        x1,y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
+        img1 = cv.line(img1, (x0,y0), (x1,y1), color,1)
+    return img1
+
 
 if __name__ == '__main__':
     socketio.run(app, port=3001, debug=True)
