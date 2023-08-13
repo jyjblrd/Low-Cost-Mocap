@@ -294,9 +294,10 @@ export default function App() {
                   {cameraPoses.map(({R, t}, i) => (
                     <CameraWireframe R={R} t={t} key={i}/>
                   ))}
-                  {/* <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/> */}
+                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/>
                   <Objects objectsRef={objects} count={objectPointCount}/>
                   <OrbitControls />
+                  <axesHelper args={[0.2]}/>
                 </Canvas>
               </Col>
             </Row>
