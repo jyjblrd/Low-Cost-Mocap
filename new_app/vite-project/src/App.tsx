@@ -11,7 +11,8 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Stats, OrbitControls } from '@react-three/drei'
 import Points from './components/Points';
 import { socket } from './shared/styles/scripts/socket';
-import { matrix, mean, multiply } from 'mathjs';
+import { matrix, mean, multiply, rotationMatrix } from 'mathjs';
+import Objects from './components/Objects';
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -23,9 +24,11 @@ export default function App() {
   const [capturedPointsForPose, setCapturedPointsForPose] = useState("");
   
   const [isTriangulatingPoints, setIsTriangulatingPoints] = useState(false);
+  const [isLocatingObjects, setIsLocatingObjects] = useState(false);
 
-  const objectPoints = useRef<Array<Array<number>>>([])
-  const objectPointErrors = useRef<Array<number>>([])
+  const objectPoints = useRef<Array<Array<Array<number>>>>([])
+  const objectPointErrors = useRef<Array<Array<number>>>([])
+  const objects = useRef<Array<Array<Object>>>([])
   const [objectPointCount, setObjectPointCount] = useState(0);
 
   const [cameraPoses, setCameraPoses] = useState<Array<object>>([])
@@ -56,15 +59,21 @@ export default function App() {
   }, [capturedPointsForPose])
 
   useEffect(() => {
-    socket.on("object-point", (data) => {
-      const rotated_point = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
-      objectPoints.current = objectPoints.current.concat(rotated_point)
-      objectPointErrors.current = objectPointErrors.current.concat(data["errors"])
+    socket.on("object-points", (data) => {
+      const rotated_points = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      const rotated_objects = data["objects"].map(({location, rotationMatrix, error}) => ({
+        location: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), location)._data,
+        rotationMatrix: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), rotationMatrix)._data,
+        error
+      }))
+      objectPoints.current.push(rotated_points)
+      objectPointErrors.current.push(data["errors"])
+      objects.current.push(rotated_objects)
       setObjectPointCount(objectPointCount+1)
     })
 
     return () => {
-      socket.off("object-point")
+      socket.off("object-points")
     }
   }, [objectPointCount])
 
@@ -222,9 +231,45 @@ export default function App() {
                     if (!isTriangulatingPoints) {
                       objectPoints.current = []
                       objectPointErrors.current = []
+                      objects.current = []
                     }
                     setIsTriangulatingPoints(!isTriangulatingPoints);
                     startLiveMocap(isTriangulatingPoints ? "stop" : "start");
+                  }
+                }>
+                  {isTriangulatingPoints ? "Stop" : "Start"}
+                </Button>
+              </Col>
+            </Row>
+            <Row>
+              <Col xs="auto">
+                <h4>Locate Objects</h4>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  variant={isLocatingObjects ? "outline-danger" : "outline-primary"}
+                  disabled={!cameraStreamRunning}
+                  onClick={() => {
+                    setIsLocatingObjects(!isLocatingObjects);
+                    socket.emit("locate-objects", { startOrStop: isLocatingObjects ? "stop" : "start" })
+                  }
+                }>
+                  {isLocatingObjects ? "Stop" : "Start"}
+                </Button>
+              </Col>
+            </Row>
+            <Row>
+              <Col xs="auto">
+                <h4>Set Scale Using Points</h4>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  variant="outline-primary"
+                  disabled={!isTriangulatingPoints && objectPoints.current.length == 0}
+                  onClick={() => {
+                    socket.emit("determine-scale", { objectPoints: objectPoints.current, cameraPoses: cameraPoses })
                   }
                 }>
                   {isTriangulatingPoints ? "Stop" : "Start"}
@@ -239,7 +284,7 @@ export default function App() {
           <Card className='shadow-sm p-3'>
             <Row>
               <Col xs="auto">
-                <h4>Scene Viewer {objectPointErrors.current.length !== 0 ? mean(objectPointErrors.current) : ""}</h4>
+                {/* <h4>Scene Viewer {objectPointErrors.current.length !== 0 ? mean(objectPointErrors.current.flat()) : ""}</h4> */}
               </Col>
             </Row>
             <Row>
@@ -249,7 +294,8 @@ export default function App() {
                   {cameraPoses.map(({R, t}, i) => (
                     <CameraWireframe R={R} t={t} key={i}/>
                   ))}
-                  <Points objectPoints={objectPoints} objectPointErrors={objectPointErrors} count={objectPointCount}/>
+                  {/* <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/> */}
+                  <Objects objectsRef={objects} count={objectPointCount}/>
                   <OrbitControls />
                 </Canvas>
               </Col>

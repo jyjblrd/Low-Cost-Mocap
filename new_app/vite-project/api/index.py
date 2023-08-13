@@ -29,6 +29,8 @@ class Cameras:
 
         self.is_triangulating_points = False
         self.camera_poses = None
+
+        self.is_locating_objects = False
     
     def edit_settings(self, exposure, gain):
         self.cameras.exposure = [exposure] * self.num_cameras
@@ -54,7 +56,11 @@ class Cameras:
                     socketio.emit("image-points", [x[0] for x in image_points])
                 elif self.is_triangulating_points:
                     errors, object_points, frames = find_point_correspondance_and_object_points(image_points, self.camera_poses, frames)
-                    socketio.emit("object-point", {"object_points": object_points.tolist(), "errors": errors.tolist()})
+                    objects = []
+                    if self.is_locating_objects:
+                        objects = locate_objects(object_points, errors)
+                    print(objects)
+                    socketio.emit("object-points", {"object_points": object_points.tolist(), "errors": errors.tolist(), "objects": objects})
         
         return frames
 
@@ -100,6 +106,12 @@ class Cameras:
         self.is_capturing_points = False
         self.is_triangulating_points = False
         self.camera_poses = None
+
+    def start_locating_objects(self):
+        self.is_locating_objects = True
+
+    def stop_locating_objects(self):
+        self.is_locating_objects = False
     
     def get_camera_params(self, camera_num):
         return {
@@ -406,6 +418,80 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
 
     return np.array(errors), np.array(object_points), frames
 
+def locate_objects(object_points, errors):
+    d1 = 0.15
+    d2 = 0.1
+
+    distance_matrix = np.zeros((object_points.shape[0], object_points.shape[0]))
+    already_matched_points = []
+    objects = []
+
+    for i in range(0, object_points.shape[0]):
+        for j in range(0, object_points.shape[0]):
+            distance_matrix[i,j] = np.sqrt(np.sum((object_points[i] - object_points[j])**2))
+
+    for i in range(0, object_points.shape[0]):
+        d1_matches = np.abs(distance_matrix[i] - d1) < 0.01
+        d2_matches = np.abs(distance_matrix[i] - d2) < 0.01
+        if np.any(d1_matches) and np.any(d2_matches):
+            d1_i = np.argmax(d1_matches)
+            d2_i = np.argmax(d2_matches)
+
+            already_matched_points.append(i)
+            already_matched_points.append(d1_i)
+            already_matched_points.append(d2_i)
+
+            location = object_points[i]
+            error = np.mean([errors[i], errors[d1_i], errors[d2_i]])
+
+            vec1 = object_points[d1_i] - object_points[i]
+            vec2 = object_points[d2_i] - object_points[i]
+            vec3 = np.cross(vec1, vec2)
+            vec1 /= linalg.norm(vec1)
+            vec2 /= linalg.norm(vec2)
+            vec3 /= linalg.norm(vec3)
+            rotation_matrix = np.vstack((vec1, vec2, vec3)).T
+
+            objects.append({
+                "location": location.tolist(),
+                "rotationMatrix": rotation_matrix.tolist(),
+                "error": error.tolist()
+            })
+    
+    return objects
+
+@socketio.on("locate-objects")
+def start_or_stop_locating_objects(data):
+    cameras = Cameras.instance()
+    start_or_stop = data["startOrStop"]
+
+    if (start_or_stop == "start"):
+        cameras.start_locating_objects()
+        return
+    elif (start_or_stop == "stop"):
+        cameras.stop_locating_objects()
+
+@socketio.on("determine-scale")
+def determine_scale(data):
+    object_points = data["objectPoints"]
+    camera_poses = data["cameraPoses"]
+    actual_distance = 0.15
+    observed_distances = []
+
+    for object_points_i in object_points:
+        if len(object_points_i) != 2:
+            continue
+
+        object_points_i = np.array(object_points_i)
+
+        observed_distances.append(np.sqrt(np.sum((object_points_i[0] - object_points_i[1])**2)))
+
+    scale_factor = actual_distance/np.mean(observed_distances)
+    for i in range(0, len(camera_poses)):
+        camera_poses[i]["t"] = (np.array(camera_poses[i]["t"]) * scale_factor).tolist()
+
+    socketio.emit("camera-pose", {"error": None, "camera_poses": camera_poses})
+
 
 @socketio.on("triangulate-points")
 def live_mocap(data):
@@ -436,7 +522,6 @@ def numpy_fillna(data):
 def drawlines(img1,lines):
     r,c,_ = img1.shape
     for r in lines:
-        print(r)
         color = tuple(np.random.randint(0,255,3).tolist())
         x0,y0 = map(int, [0, -r[2]/r[1] ])
         x1,y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
