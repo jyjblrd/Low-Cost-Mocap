@@ -18,7 +18,7 @@ socketio = SocketIO(app, cors_allowed_origins='*')
 class Cameras:
     def __init__(self):
         dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "camera-params copy.json")
+        filename = os.path.join(dirname, "camera-params.json")
         f = open(filename)
         self.camera_params = json.load(f)
 
@@ -41,6 +41,7 @@ class Cameras:
 
         for i in range(0, self.num_cameras):
             frames[i] = np.rot90(frames[i], k=self.camera_params[i]["rotation"])
+            frames[i] = make_square(frames[i])
             frames[i] = cv.undistort(frames[i], self.get_camera_params(i)["intrinsic_matrix"], self.get_camera_params(i)["distortion_coef"])
             frames[i] = cv.cvtColor(frames[i], cv.COLOR_RGB2BGR)
 
@@ -49,7 +50,6 @@ class Cameras:
             for i in range(0, self.num_cameras):
                 frames[i], single_camera_image_points = self._find_dot(frames[i])
                 image_points.append(single_camera_image_points)
-            #image_points = numpy_fillna(image_points)
             
             if (any(np.all(point[0] != [None,None]) for point in image_points)):
                 if self.is_capturing_points and not self.is_triangulating_points:
@@ -70,7 +70,7 @@ class Cameras:
         return np.hstack(frames)
 
     def _find_dot(self, img):
-        #img = cv.GaussianBlur(img,(5,5),0)
+        # img = cv.GaussianBlur(img,(5,5),0)
         grey = cv.cvtColor(img, cv.COLOR_RGB2GRAY)
         grey = cv.threshold(grey, 255*0.2, 255, cv.THRESH_BINARY)[1]
         contours,_ = cv.findContours(grey, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
@@ -177,7 +177,7 @@ def calculate_camera_pose(data):
         camera1_image_points = np.take(camera1_image_points, not_none_indicies, axis=0).astype(np.float32)
         camera2_image_points = np.take(camera2_image_points, not_none_indicies, axis=0).astype(np.float32)
 
-        F, _ = cv.findFundamentalMat(camera1_image_points, camera2_image_points, cv.FM_RANSAC)
+        F, _ = cv.findFundamentalMat(camera1_image_points, camera2_image_points, cv.FM_RANSAC, 1, 0.99999)
         E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
         possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
 
@@ -195,8 +195,9 @@ def calculate_camera_pose(data):
                 R = possible_Rs[i]
                 t = possible_ts[i]
 
-        R = camera_poses[-1]["R"] @ R
-        t = camera_poses[-1]["t"] + t
+        R = R @ camera_poses[-1]["R"]
+        print(camera_poses[-1]["t"])
+        t = camera_poses[-1]["t"] + (camera_poses[-1]["R"] @ t)
 
         camera_poses.append({
             "R": R,
@@ -279,7 +280,7 @@ def bundle_adjustment(image_points, camera_poses):
             intrinsic = cameras.get_camera_params(i)["intrinsic_matrix"]
             intrinsic[0, 0] = focal_distances[i]
             intrinsic[1, 1] = focal_distances[i]
-            #cameras.set_camera_params(i, intrinsic)
+            # cameras.set_camera_params(i, intrinsic)
         object_points = triangulate_points(image_points, camera_poses)
         errors = calculate_reprojection_errors(image_points, object_points, camera_poses)
         errors = errors.astype(np.float32)
@@ -527,6 +528,15 @@ def drawlines(img1,lines):
         x1,y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
         img1 = cv.line(img1, (x0,y0), (x1,y1), color,1)
     return img1
+
+
+def make_square(img):
+    x, y, _ = img.shape
+    size = max(x, y)
+    new_img = np.zeros((size, size, 3), dtype=np.uint8)
+    ax,ay = (size - img.shape[1])//2,(size - img.shape[0])//2
+    new_img[ay:img.shape[0]+ay,ax:ax+img.shape[1]] = img
+    return new_img
 
 
 if __name__ == '__main__':
