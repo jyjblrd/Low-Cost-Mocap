@@ -60,7 +60,9 @@ export default function App() {
 
   useEffect(() => {
     socket.on("object-points", (data) => {
-      const rotated_points = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      //const rotated_points = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      const rotated_points = data["filtered_point"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      console.log(rotated_points)
       const rotated_objects = data["objects"].map(({location, rotationMatrix, error}) => ({
         location: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), location)._data,
         rotationMatrix: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), rotationMatrix)._data,

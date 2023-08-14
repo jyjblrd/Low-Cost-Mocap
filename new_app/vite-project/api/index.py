@@ -10,9 +10,57 @@ from scipy import linalg, optimize
 from flask_socketio import SocketIO, emit
 from scipy.spatial.transform import Rotation
 import copy
+import time
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins='*')
+
+class KalmanFilter:
+    def __init__(self):
+        state_dim = 9
+        measurement_dim = 3
+        dt = 0.1
+
+        self.kalman = cv.KalmanFilter(state_dim, measurement_dim)
+        self.kalman.transitionMatrix = np.array([[1, 0, 0, dt, 0, 0, 0.5*dt**2, 0, 0],
+                                                 [0, 1, 0, 0, dt, 0, 0, 0.5*dt**2, 0],
+                                                 [0, 0, 1, 0, 0, dt, 0, 0, 0.5*dt**2],
+                                                 [0, 0, 0, 1, 0, 0, dt, 0, 0],
+                                                 [0, 0, 0, 0, 1, 0, 0, dt, 0],
+                                                 [0, 0, 0, 0, 0, 1, 0, 0, dt],
+                                                 [0, 0, 0, 0, 0, 0, 1, 0, 0],
+                                                 [0, 0, 0, 0, 0, 0, 0, 1, 0],
+                                                 [0, 0, 0, 0, 0, 0, 0, 0, 1]], dtype=np.float32)
+
+        self.kalman.processNoiseCov = np.eye(state_dim, dtype=np.float32) * 0.1
+        self.kalman.measurementNoiseCov = np.eye(measurement_dim, dtype=np.float32) * 1
+        self.kalman.measurementMatrix = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],
+                                                  [0, 1, 0, 0, 0, 0, 0, 0, 0],
+                                                  [0, 0, 1, 0, 0, 0, 0, 0, 0]], dtype=np.float32)
+        
+        self.prev_measurement_time = 0
+
+    def predict_location(self, possible_new_measurements):
+        if len(possible_new_measurements) == 0:
+            return np.array([])
+
+        dt = time.time() - self.prev_measurement_time
+        self.prev_measurement_time = time.time()
+
+        self.kalman.transitionMatrix[:3, 3:6] = dt * np.eye(3)
+        self.kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
+
+        predicted_location = self.kalman.predict()[:3].T[0]
+        print(possible_new_measurements)
+        print(predicted_location)
+        distances_to_predicted_location = np.sqrt(np.sum((possible_new_measurements - predicted_location)**2, axis=1))
+        new_measurement = possible_new_measurements[np.argmin(distances_to_predicted_location)].astype(np.float32)
+
+        self.kalman.correct(new_measurement)
+        predicted_state = self.kalman.statePost[:3]  # Predicted 3D location
+        return predicted_state.T[0]
+    
+kalman_filter = KalmanFilter()
 
 @Singleton
 class Cameras:
@@ -59,8 +107,8 @@ class Cameras:
                     objects = []
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
-                    print(objects)
-                    socketio.emit("object-points", {"object_points": object_points.tolist(), "errors": errors.tolist(), "objects": objects})
+                    filtered_point = kalman_filter.predict_location(object_points).tolist()
+                    socketio.emit("object-points", {"object_points": object_points.tolist(), "errors": errors.tolist(), "objects": objects, "filtered_point": [filtered_point]})
         
         return frames
 
@@ -126,7 +174,6 @@ class Cameras:
         
         if distortion_coef is not None:
             self.camera_params[camera_num]["distortion_coef"] = distortion_coef
-    
 
 
 @app.route("/api/camera-stream")
