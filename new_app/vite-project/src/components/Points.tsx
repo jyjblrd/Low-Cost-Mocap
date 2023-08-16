@@ -1,8 +1,8 @@
-import { max } from "mathjs";
+import { max, multiply } from "mathjs";
 import { MutableRefObject, useEffect, useRef } from "react";
-import { Color, InstancedMesh, Object3D } from "three";
+import { Color, InstancedMesh, Matrix4, Object3D } from "three";
 
-export default function Points({objectPointsRef, objectPointErrorsRef, count}: {objectPointsRef: MutableRefObject<number[][][]>, objectPointErrorsRef: MutableRefObject<number[][]>, count: number}) {
+export default function Points({objectPointsRef, objectPointErrorsRef, count, toWorldCoordsMatrix}: {objectPointsRef: MutableRefObject<number[][][]>, objectPointErrorsRef: MutableRefObject<number[][]>, count: number, toWorldCoordsMatrix: number[][]}) {
   const objectPoints = objectPointsRef.current.flat()
   const objectPointErrors = objectPointErrorsRef.current.flat()
 
@@ -22,7 +22,10 @@ export default function Points({objectPointsRef, objectPointErrorsRef, count}: {
     objectPoints.forEach(([x, y, z]: Array<number>, i) => {
       temp.position.set(x, y, z)
       temp.updateMatrix()
-      instancedMeshRef.current!.setMatrixAt(i, temp.matrix)
+      let toWorldCoordsThreejsMatrix = new Matrix4()
+      toWorldCoordsThreejsMatrix.fromArray(toWorldCoordsMatrix.flat()).transpose()
+      toWorldCoordsThreejsMatrix.multiply(temp.matrix)
+      instancedMeshRef.current!.setMatrixAt(i, toWorldCoordsThreejsMatrix)
       instancedMeshRef.current!.setColorAt(i, errorToColour(objectPointErrors[i]))
     })
     instancedMeshRef.current!.instanceMatrix.needsUpdate = true

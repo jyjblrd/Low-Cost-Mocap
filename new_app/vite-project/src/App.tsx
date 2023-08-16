@@ -32,6 +32,7 @@ export default function App() {
   const [objectPointCount, setObjectPointCount] = useState(0);
 
   const [cameraPoses, setCameraPoses] = useState<Array<object>>([])
+  const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
 
   const updateCameraSettings: FormEventHandler = (e) => {
     e.preventDefault()
@@ -59,9 +60,20 @@ export default function App() {
   }, [capturedPointsForPose])
 
   useEffect(() => {
+    socket.on("to-world-coords-matrix", (data) => {
+      setToWorldCoordsMatrix(data["to_world_coords_matrix"])
+      setObjectPointCount(objectPointCount+1) 
+    })
+
+    return () => {
+      socket.off("to-world-coords-matrix")
+    }
+  }, [objectPointCount])
+
+  useEffect(() => {
     socket.on("object-points", (data) => {
-      //const rotated_points = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
-      const rotated_points = data["filtered_point"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      const rotated_points = data["object_points"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
+      //const rotated_points = data["filtered_point"].map(objectPoint => multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data)
       console.log(rotated_points)
       const rotated_objects = data["objects"].map(({location, rotationMatrix, error}) => ({
         location: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), location)._data,
@@ -81,7 +93,7 @@ export default function App() {
 
   useEffect(() => {
     socket.on("camera-pose", data => {
-      console.log(data["error"])
+      console.log(data["camera_poses"])
       setCameraPoses(data["camera_poses"])
     })
 
@@ -214,6 +226,22 @@ export default function App() {
                   }}>
                   Calculate Camera Pose with {isValidJson(`[${capturedPointsForPose.slice(0,-1)}]`) ? JSON.parse(`[${capturedPointsForPose.slice(0,-1)}]`).length : 0} points
                 </Button>
+              </Col> 
+            </Row>
+            <Row>
+              <Col>
+                <Form.Control 
+                  value={JSON.stringify(cameraPoses)}
+                  onChange={(event) => setCameraPoses(JSON.parse(event.target.value))}
+                />
+              </Col>
+            </Row>
+            <Row>
+              <Col>
+                <Form.Control 
+                  value={JSON.stringify(toWorldCoordsMatrix)}
+                  onChange={(event) => setToWorldCoordsMatrix(JSON.parse(event.target.value))}
+                />
               </Col>
             </Row>
           </Card>
@@ -274,7 +302,41 @@ export default function App() {
                     socket.emit("determine-scale", { objectPoints: objectPoints.current, cameraPoses: cameraPoses })
                   }
                 }>
-                  {isTriangulatingPoints ? "Stop" : "Start"}
+                  Run
+                </Button>
+              </Col>
+            </Row>
+            <Row>
+              <Col xs="auto">
+                <h4>Acquire Floor</h4>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  variant="outline-primary"
+                  disabled={!isTriangulatingPoints && objectPoints.current.length == 0}
+                  onClick={() => {
+                    socket.emit("acquire-floor", { objectPoints: objectPoints.current })
+                  }
+                }>
+                  Run
+                </Button>
+              </Col>
+            </Row>
+            <Row>
+              <Col xs="auto">
+                <h4>Set Origin</h4>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  variant="outline-primary"
+                  disabled={!isTriangulatingPoints && objectPoints.current.length == 0}
+                  onClick={() => {
+                    socket.emit("set-origin", { objectPoint: objectPoints.current[0][0], toWorldCoordsMatrix })
+                  }
+                }>
+                  Run
                 </Button>
               </Col>
             </Row>
@@ -294,12 +356,13 @@ export default function App() {
                 <Canvas>
                   <ambientLight/>
                   {cameraPoses.map(({R, t}, i) => (
-                    <CameraWireframe R={R} t={t} key={i}/>
+                      <CameraWireframe R={R} t={t} toWorldCoordsMatrix={toWorldCoordsMatrix} key={i}/>
                   ))}
-                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/>
+                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount} toWorldCoordsMatrix={toWorldCoordsMatrix}/>
                   <Objects objectsRef={objects} count={objectPointCount}/>
                   <OrbitControls />
                   <axesHelper args={[0.2]}/>
+                  <gridHelper/>
                 </Canvas>
               </Col>
             </Row>

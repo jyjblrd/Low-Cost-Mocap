@@ -1,7 +1,7 @@
 import { matrix, multiply, transpose } from "mathjs";
 import { BufferAttribute, BufferGeometry, EdgesGeometry, LineBasicMaterial, LineSegments } from "three";
 
-export default function CameraWireframe({R, t}: {R: Array<Array<number>>, t: Array<number>}) {
+export default function CameraWireframe({R, t, toWorldCoordsMatrix}: {R: Array<Array<number>>, t: Array<number>, toWorldCoordsMatrix: number[][]}) {
   const vertices = [
     [0,0,0],
     [1,0.85,1],
@@ -32,6 +32,7 @@ export default function CameraWireframe({R, t}: {R: Array<Array<number>>, t: Arr
     [0,0,0,1],
   ])
   transformationMatrix = multiply(flipMatrix, transformationMatrix)
+  transformationMatrix = multiply(toWorldCoordsMatrix, transformationMatrix)
 
   const transformedVertices = new Float32Array(
     vertices

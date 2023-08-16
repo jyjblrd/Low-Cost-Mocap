@@ -11,6 +11,8 @@ from flask_socketio import SocketIO, emit
 from scipy.spatial.transform import Rotation
 import copy
 import time
+from sklearn.preprocessing import normalize
+
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins='*')
@@ -72,6 +74,7 @@ class Cameras:
 
         self.cameras = Camera(fps=150, resolution=Camera.RES_SMALL, gain=10, exposure=100)
         self.num_cameras = len(self.cameras.exposure)
+        print(self.num_cameras)
 
         self.is_capturing_points = False
 
@@ -79,6 +82,8 @@ class Cameras:
         self.camera_poses = None
 
         self.is_locating_objects = False
+
+        self.to_world_coords_matrix = None
     
     def edit_settings(self, exposure, gain):
         self.cameras.exposure = [exposure] * self.num_cameras
@@ -190,6 +195,61 @@ def camera_stream():
 
     return Response(gen(cameras), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+
+@socketio.on("acquire-floor")
+def acquire_floor(data):
+    cameras = Cameras.instance()
+    object_points = data["objectPoints"]
+    object_points = np.array([item for sublist in object_points for item in sublist])
+
+    tmp_A = []
+    tmp_b = []
+    for i in range(len(object_points)):
+        tmp_A.append([object_points[i,0], object_points[i,1], 1])
+        tmp_b.append(object_points[i,2])
+    b = np.matrix(tmp_b).T
+    A = np.matrix(tmp_A)
+
+    fit, residual, rnk, s = linalg.lstsq(A, b)
+    fit = fit.T[0]
+
+    plane_normal = np.array([[fit[0]], [fit[1]], [-1]])
+    plane_normal = plane_normal / linalg.norm(plane_normal)
+    up_normal = np.array([[0],[1],[0]], dtype=np.float32)
+
+    plane = np.array([fit[0], fit[1], -1, fit[2]])
+
+    # https://math.stackexchange.com/a/897677/1012327
+    G = np.array([
+        [np.dot(plane_normal.T,up_normal)[0][0], -linalg.norm(np.cross(plane_normal.T[0],up_normal.T[0])), 0],
+        [linalg.norm(np.cross(plane_normal.T[0],up_normal.T[0])), np.dot(plane_normal.T,up_normal)[0][0], 0],
+        [0, 0, 1]
+    ])
+    print([plane_normal.T[0], ((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal)/linalg.norm((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal))).T[0], np.cross(up_normal.T[0],plane_normal.T[0])])
+    F = np.array([plane_normal.T[0], ((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal)/linalg.norm((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal))).T[0], np.cross(up_normal.T[0],plane_normal.T[0])]).T
+    R = F @ G @ linalg.inv(F)
+
+    print(np.vstack((np.c_[R, [0,0,0]], [[0,0,0,1]])))
+    cameras.to_world_coords_matrix = np.array(np.vstack((np.c_[R, [0,0,0]], [[0,0,0,1]])))
+
+    socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
+
+
+@socketio.on("set-origin")
+def acquire_floor(data):
+    cameras = Cameras.instance()
+    object_point = np.array(data["objectPoint"])
+    to_world_coords_matrix = np.array(data["toWorldCoordsMatrix"])
+
+    rotated_object_point = to_world_coords_matrix[:3,:3] @ object_point
+
+    print(np.array([[1,0,0,object_point[0]],[0,1,0,object_point[1]],[0,0,1,object_point[2]],[0,0,0,1]]))
+    to_world_coords_matrix[:3,3] = -rotated_object_point
+    print(to_world_coords_matrix)
+    cameras.to_world_coords_matrix = to_world_coords_matrix
+
+    socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
+
 @socketio.on("update-camera-settings")
 def change_camera_settings(data):
     cameras = Cameras.instance()
@@ -256,10 +316,7 @@ def calculate_camera_pose(data):
     object_points = triangulate_points(image_points, camera_poses)
     error = np.mean(calculate_reprojection_errors(image_points, object_points, camera_poses))
 
-    for i in range(0, len(camera_poses)):
-        camera_poses[i] = {k: v.tolist() for (k, v) in camera_poses[i].items()}
-    
-    socketio.emit("camera-pose", {"error": error, "camera_poses": camera_poses})
+    socketio.emit("camera-pose", {"camera_poses": camera_pose_to_serializable(camera_poses)})
 
 def calculate_reprojection_errors(image_points, object_points, camera_poses):
     errors = np.array([])
@@ -331,6 +388,7 @@ def bundle_adjustment(image_points, camera_poses):
         object_points = triangulate_points(image_points, camera_poses)
         errors = calculate_reprojection_errors(image_points, object_points, camera_poses)
         errors = errors.astype(np.float32)
+        socketio.emit("camera-pose", {"camera_poses": camera_pose_to_serializable(camera_poses)})
         
         return errors
 
@@ -584,6 +642,13 @@ def make_square(img):
     ax,ay = (size - img.shape[1])//2,(size - img.shape[0])//2
     new_img[ay:img.shape[0]+ay,ax:ax+img.shape[1]] = img
     return new_img
+
+
+def camera_pose_to_serializable(camera_poses):
+    for i in range(0, len(camera_poses)):
+        camera_poses[i] = {k: v.tolist() for (k, v) in camera_poses[i].items()}
+
+    return camera_poses
 
 
 if __name__ == '__main__':
