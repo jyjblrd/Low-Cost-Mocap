@@ -12,10 +12,17 @@ from scipy.spatial.transform import Rotation
 import copy
 import time
 from sklearn.preprocessing import normalize
+import serial
+import threading
 
+serialLock = threading.Lock()
+
+ser = serial.Serial("/dev/cu.usbserial-02X2K2GE", 460800, write_timeout=1, )
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins='*')
+
+cameras_init = False
 
 class KalmanFilter:
     def __init__(self):
@@ -53,8 +60,6 @@ class KalmanFilter:
         self.kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
         predicted_location = self.kalman.predict()[:3].T[0]
-        print(possible_new_measurements)
-        print(predicted_location)
         distances_to_predicted_location = np.sqrt(np.sum((possible_new_measurements - predicted_location)**2, axis=1))
         new_measurement = possible_new_measurements[np.argmin(distances_to_predicted_location)].astype(np.float32)
 
@@ -72,7 +77,7 @@ class Cameras:
         f = open(filename)
         self.camera_params = json.load(f)
 
-        self.cameras = Camera(fps=150, resolution=Camera.RES_SMALL, gain=10, exposure=100)
+        self.cameras = Camera(fps=90, resolution=Camera.RES_SMALL, gain=10, exposure=100)
         self.num_cameras = len(self.cameras.exposure)
         print(self.num_cameras)
 
@@ -84,6 +89,11 @@ class Cameras:
         self.is_locating_objects = False
 
         self.to_world_coords_matrix = None
+
+        self.drone_armed = False
+
+        global cameras_init
+        cameras_init = True
     
     def edit_settings(self, exposure, gain):
         self.cameras.exposure = [exposure] * self.num_cameras
@@ -110,9 +120,20 @@ class Cameras:
                 elif self.is_triangulating_points:
                     errors, object_points, frames = find_point_correspondance_and_object_points(image_points, self.camera_poses, frames)
                     objects = []
+                    filtered_point = []
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
-                    filtered_point = kalman_filter.predict_location(object_points).tolist()
+                        filtered_point = kalman_filter.predict_location(object_points).tolist()
+                    if self.drone_armed and len(filtered_point) != 0:
+                        world_coord_point = np.array([[-1,0,0],[0,-1,0],[0,0,1]]) @ filtered_point
+                        world_coord_point = np.concatenate((world_coord_point, [1]))
+                        world_coord_point = np.array(self.to_world_coords_matrix) @ world_coord_point
+                        world_coord_point = world_coord_point[:3] / world_coord_point[3]
+                        world_coord_point = world_coord_point.round(4)
+                        print(world_coord_point)
+                        serial_data = { "pos": world_coord_point.tolist() }
+                        with serialLock:
+                            ser.write(json.dumps(serial_data).encode('utf-8'))
                     socketio.emit("object-points", {"object_points": object_points.tolist(), "errors": errors.tolist(), "objects": objects, "filtered_point": [filtered_point]})
         
         return frames
@@ -184,9 +205,18 @@ class Cameras:
 @app.route("/api/camera-stream")
 def camera_stream():
     cameras = Cameras.instance()
+    
 
     def gen(cameras):
+        frequency = 30
+        loop_interval = 1.0 / frequency
+        last_run_time = 0
+
         while True:
+            time_now = time.time()
+            if time_now - last_run_time < loop_interval:
+                time.sleep(last_run_time - time_now + loop_interval)
+            last_run_time = time.time()
             frames = cameras.get_frames()
             jpeg_frame = cv.imencode('.jpg', frames)[1].tostring()
 
@@ -194,6 +224,45 @@ def camera_stream():
                 b'Content-Type: image/jpeg\r\n\r\n' + jpeg_frame + b'\r\n')
 
     return Response(gen(cameras), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@socketio.on("arm-drone")
+def arm_drone(data):
+    global cameras_init
+    if not cameras_init:
+        return
+    
+    Cameras.instance().drone_armed = data["droneArmed"]
+    serial_data = {
+        "armed": data["droneArmed"],
+    }
+    with serialLock:
+        print(data["count"])
+        ser.write(json.dumps(serial_data).encode('utf-8'))
+
+@socketio.on("set-drone-pid")
+def arm_drone(data):
+    serial_data = {
+        "pid": [float(x) for x in data["dronePID"]],
+    }
+    with serialLock:
+        ser.write(json.dumps(serial_data).encode('utf-8'))
+
+@socketio.on("set-drone-setpoint")
+def arm_drone(data):
+    serial_data = {
+        "setpoint": [float(x) for x in data["droneSetpoint"]],
+    }
+    with serialLock:
+        ser.write(json.dumps(serial_data).encode('utf-8'))
+
+@socketio.on("set-drone-trim")
+def arm_drone(data):
+    serial_data = {
+        "trim": [int(x) for x in data["droneTrim"]],
+    }
+    with serialLock:
+        ser.write(json.dumps(serial_data).encode('utf-8'))
 
 
 @socketio.on("acquire-floor")
@@ -225,11 +294,9 @@ def acquire_floor(data):
         [linalg.norm(np.cross(plane_normal.T[0],up_normal.T[0])), np.dot(plane_normal.T,up_normal)[0][0], 0],
         [0, 0, 1]
     ])
-    print([plane_normal.T[0], ((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal)/linalg.norm((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal))).T[0], np.cross(up_normal.T[0],plane_normal.T[0])])
     F = np.array([plane_normal.T[0], ((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal)/linalg.norm((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal))).T[0], np.cross(up_normal.T[0],plane_normal.T[0])]).T
     R = F @ G @ linalg.inv(F)
 
-    print(np.vstack((np.c_[R, [0,0,0]], [[0,0,0,1]])))
     cameras.to_world_coords_matrix = np.array(np.vstack((np.c_[R, [0,0,0]], [[0,0,0,1]])))
 
     socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
@@ -243,9 +310,7 @@ def acquire_floor(data):
 
     rotated_object_point = to_world_coords_matrix[:3,:3] @ object_point
 
-    print(np.array([[1,0,0,object_point[0]],[0,1,0,object_point[1]],[0,0,1,object_point[2]],[0,0,0,1]]))
     to_world_coords_matrix[:3,3] = -rotated_object_point
-    print(to_world_coords_matrix)
     cameras.to_world_coords_matrix = to_world_coords_matrix
 
     socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
@@ -303,7 +368,6 @@ def calculate_camera_pose(data):
                 t = possible_ts[i]
 
         R = R @ camera_poses[-1]["R"]
-        print(camera_poses[-1]["t"])
         t = camera_poses[-1]["t"] + (camera_poses[-1]["R"] @ t)
 
         camera_poses.append({
@@ -393,7 +457,6 @@ def bundle_adjustment(image_points, camera_poses):
         return errors
 
     focal_distance = cameras.get_camera_params(0)["intrinsic_matrix"][0,0]
-    print(focal_distance)
     init_params = np.array([focal_distance])
     for i, camera_pose in enumerate(camera_poses[1:]):
         rot_vec = Rotation.as_rotvec(Rotation.from_matrix(camera_pose["R"])).flatten()
@@ -604,6 +667,7 @@ def live_mocap(data):
     cameras = Cameras.instance()
     start_or_stop = data["startOrStop"]
     camera_poses = data["cameraPoses"]
+    cameras.to_world_coords_matrix = data["toWorldCoordsMatrix"]
 
     if (start_or_stop == "start"):
         cameras.start_trangulating_points(camera_poses)

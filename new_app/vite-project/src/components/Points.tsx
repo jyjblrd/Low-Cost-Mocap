@@ -2,7 +2,7 @@ import { max, multiply } from "mathjs";
 import { MutableRefObject, useEffect, useRef } from "react";
 import { Color, InstancedMesh, Matrix4, Object3D } from "three";
 
-export default function Points({objectPointsRef, objectPointErrorsRef, count, toWorldCoordsMatrix}: {objectPointsRef: MutableRefObject<number[][][]>, objectPointErrorsRef: MutableRefObject<number[][]>, count: number, toWorldCoordsMatrix: number[][]}) {
+export default function Points({objectPointsRef, objectPointErrorsRef, count}: {objectPointsRef: MutableRefObject<number[][][]>, objectPointErrorsRef: MutableRefObject<number[][]>, count: number}) {
   const objectPoints = objectPointsRef.current.flat()
   const objectPointErrors = objectPointErrorsRef.current.flat()
 
@@ -22,10 +22,7 @@ export default function Points({objectPointsRef, objectPointErrorsRef, count, to
     objectPoints.forEach(([x, y, z]: Array<number>, i) => {
       temp.position.set(x, y, z)
       temp.updateMatrix()
-      let toWorldCoordsThreejsMatrix = new Matrix4()
-      toWorldCoordsThreejsMatrix.fromArray(toWorldCoordsMatrix.flat()).transpose()
-      toWorldCoordsThreejsMatrix.multiply(temp.matrix)
-      instancedMeshRef.current!.setMatrixAt(i, toWorldCoordsThreejsMatrix)
+      instancedMeshRef.current!.setMatrixAt(i, temp.matrix)
       instancedMeshRef.current!.setColorAt(i, errorToColour(objectPointErrors[i]))
     })
     instancedMeshRef.current!.instanceMatrix.needsUpdate = true
