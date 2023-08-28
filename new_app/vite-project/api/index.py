@@ -558,13 +558,14 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
             distances_to_line = np.array([])
             if len(points) != 0:
                 distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
-            possible_matches = points[distances_to_line < 10]
+            possible_matches = points[distances_to_line < 20]
     
             if len(possible_matches) == 0:
                 for possible_group in correspondances[j]:
                     possible_group.append([None, None])
             else:
-                unmatched_image_points = unmatched_image_points[(unmatched_image_points != points[np.argmin(distances_to_line)]).all(axis=1)] # basically just subtracting 
+                unmatched_image_points = [row for row in unmatched_image_points.tolist() if row not in possible_matches.tolist()]
+                unmatched_image_points = np.array(unmatched_image_points)
                 new_correspondances_j = []
                 for possible_match in possible_matches:
                     temp = copy.deepcopy(correspondances[j])
