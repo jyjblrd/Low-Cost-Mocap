@@ -106,6 +106,13 @@ class Cameras:
             frames[i] = np.rot90(frames[i], k=self.camera_params[i]["rotation"])
             frames[i] = make_square(frames[i])
             frames[i] = cv.undistort(frames[i], self.get_camera_params(i)["intrinsic_matrix"], self.get_camera_params(i)["distortion_coef"])
+            frames[i] = cv.GaussianBlur(frames[i],(9,9),0)
+            kernel = np.array([[-2,-1,-1,-1,-2],
+                               [-1,1,3,1,-1],
+                               [-1,3,4,3,-1],
+                               [-1,1,3,1,-1],
+                               [-2,-1,-1,-1,-2]])
+            frames[i] = cv.filter2D(frames[i], -1, kernel)
             frames[i] = cv.cvtColor(frames[i], cv.COLOR_RGB2BGR)
 
         if (self.is_capturing_points):
