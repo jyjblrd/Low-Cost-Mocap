@@ -37,7 +37,7 @@ export default function App() {
   const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
 
   const [droneArmed, setDroneArmed] = useState(false)
-  const [dronePID, setDronePID] = useState(["1","1","1","1","1","1","1","1","1"])
+  const [dronePID, setDronePID] = useState(["1","1","1","1","1","1","1","1","1","1","1","1"])
   const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
 
@@ -104,19 +104,12 @@ export default function App() {
 
   useEffect(() => {
     socket.on("object-points", (data) => {
-      const rotated_points = data["object_points"].map(objectPoint => fromHomogeneous(multiply(matrix(toWorldCoordsMatrix), toHomogeneous(multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), objectPoint)._data))._data))
-      const rotated_objects = data["objects"].map(({location, rotationMatrix, error}) => ({
-        location: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), location)._data,
-        rotationMatrix: multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), rotationMatrix)._data,
-        error
-      }))
-      objectPoints.current.push(rotated_points)
-      if (data["filtered_point"][0].length != 0) {
-        const filtered_point = fromHomogeneous(multiply(matrix(toWorldCoordsMatrix), toHomogeneous(multiply(matrix([[-1,0,0],[0,-1,0],[0,0,1]]), data["filtered_point"][0])._data))._data)
-        filteredPoints.current.push(filtered_point)
+      objectPoints.current.push(data["object_points"])
+      if (data["filtered_object"][0].length != 0) {
+        filteredPoints.current.push(data["filtered_object"][0])
       }
       objectPointErrors.current.push(data["errors"])
-      objects.current.push(rotated_objects)
+      objects.current.push(data["objects"])
       setObjectPointCount(objectPointCount+1)
     })
 
@@ -550,6 +543,41 @@ export default function App() {
                 />
               </Col>
             </Row>
+            <Row className='pt-3'>
+              <Col xs={1} className='pt-2 text-end'>
+                YAW
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[9]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[9] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[10]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[10] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[11]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[11] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+            </Row>
             <Row>
               <Col>
                 <Form.Group className="mb-1">
@@ -612,7 +640,7 @@ export default function App() {
                       <CameraWireframe R={R} t={t} toWorldCoordsMatrix={toWorldCoordsMatrix} key={i}/>
                   ))}
                   <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount} toWorldCoordsMatrix={toWorldCoordsMatrix}/>
-                  <Objects objectsRef={objects} count={objectPointCount}/>
+                  {/* <Objects objectsRef={objects} count={objectPointCount}/> */}
                   <OrbitControls />
                   <axesHelper args={[0.2]}/>
                   <gridHelper/>

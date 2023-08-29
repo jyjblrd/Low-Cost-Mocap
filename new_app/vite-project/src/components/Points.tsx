@@ -20,7 +20,7 @@ export default function Points({objectPointsRef, objectPointErrorsRef, count}: {
 
   useEffect(() => {
     objectPoints.forEach(([x, y, z]: Array<number>, i) => {
-      temp.position.set(x, y, z)
+      temp.position.set(x, z, y) // y is up in threejs
       temp.updateMatrix()
       instancedMeshRef.current!.setMatrixAt(i, temp.matrix)
       instancedMeshRef.current!.setColorAt(i, errorToColour(objectPointErrors[i]))

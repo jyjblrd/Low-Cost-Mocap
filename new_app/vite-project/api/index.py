@@ -6,7 +6,8 @@ import numpy as np
 import json
 import os
 from helpers import Singleton
-from scipy import linalg, optimize
+from scipy import linalg, optimize, signal
+
 from flask_socketio import SocketIO, emit
 from scipy.spatial.transform import Rotation
 import copy
@@ -49,9 +50,17 @@ class KalmanFilter:
         
         self.prev_measurement_time = 0
 
-    def predict_location(self, possible_new_measurements):
-        if len(possible_new_measurements) == 0:
-            return np.array([])
+        self.b = signal.firwin(30, 0.004)
+        self.z = signal.lfilter_zi(self.b, 1) * 0
+
+    def predict_location(self, possible_new_objects):
+        if len(possible_new_objects) == 0:
+            return {
+                "pos": [],
+                "heading": 0
+            }
+        
+        possible_new_positions = [x["pos"] for x in possible_new_objects]
 
         dt = time.time() - self.prev_measurement_time
         self.prev_measurement_time = time.time()
@@ -60,12 +69,20 @@ class KalmanFilter:
         self.kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
         predicted_location = self.kalman.predict()[:3].T[0]
-        distances_to_predicted_location = np.sqrt(np.sum((possible_new_measurements - predicted_location)**2, axis=1))
-        new_measurement = possible_new_measurements[np.argmin(distances_to_predicted_location)].astype(np.float32)
+        distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
+        closest_match_i = np.argmin(distances_to_predicted_location)
+        new_measurement = possible_new_positions[closest_match_i].astype(np.float32)
 
         self.kalman.correct(new_measurement)
         predicted_state = self.kalman.statePost[:3]  # Predicted 3D location
-        return predicted_state.T[0]
+
+        heading = possible_new_objects[closest_match_i]["heading"]
+        # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
+        
+        return {
+            "pos": predicted_state.T[0].tolist(),
+            "heading": heading
+        }
     
 kalman_filter = KalmanFilter()
 
@@ -126,22 +143,36 @@ class Cameras:
                     socketio.emit("image-points", [x[0] for x in image_points])
                 elif self.is_triangulating_points:
                     errors, object_points, frames = find_point_correspondance_and_object_points(image_points, self.camera_poses, frames)
+
+                    # convert to world coordinates
+                    for i, object_point in enumerate(object_points):
+                        new_object_point = np.array([[-1,0,0],[0,-1,0],[0,0,1]]) @ object_point
+                        new_object_point = np.concatenate((new_object_point, [1]))
+                        new_object_point = np.array(self.to_world_coords_matrix) @ new_object_point
+                        new_object_point = new_object_point[:3] / new_object_point[3]
+                        new_object_point[1], new_object_point[2] = new_object_point[2], new_object_point[1]
+                        object_points[i] = new_object_point
+
                     objects = []
-                    filtered_point = []
+                    filtered_object = []
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
-                        filtered_point = kalman_filter.predict_location(object_points).tolist()
-                    if self.drone_armed and len(filtered_point) != 0:
-                        world_coord_point = np.array([[-1,0,0],[0,-1,0],[0,0,1]]) @ filtered_point
-                        world_coord_point = np.concatenate((world_coord_point, [1]))
-                        world_coord_point = np.array(self.to_world_coords_matrix) @ world_coord_point
-                        world_coord_point = world_coord_point[:3] / world_coord_point[3]
-                        world_coord_point = world_coord_point.round(4)
-                        print(world_coord_point)
-                        serial_data = { "pos": world_coord_point.tolist() }
-                        with serialLock:
-                            ser.write(json.dumps(serial_data).encode('utf-8'))
-                    socketio.emit("object-points", {"object_points": object_points.tolist(), "errors": errors.tolist(), "objects": objects, "filtered_point": [filtered_point]})
+                        filtered_object = kalman_filter.predict_location(objects)
+
+                        if self.drone_armed and len(filtered_object["pos"]) != 0:
+                            filtered_object["pos"] = [round(x, 4) for x in filtered_object["pos"]]
+                            filtered_object["heading"] = round(filtered_object["heading"], 4)
+                            serial_data = { "pos": filtered_object["pos"] + [filtered_object["heading"]]}
+                            print(filtered_object)
+                            with serialLock:
+                                ser.write(json.dumps(serial_data).encode('utf-8'))
+                    
+                    socketio.emit("object-points", {
+                        "object_points": object_points.tolist(), 
+                        "errors": errors.tolist(), 
+                        "objects": [{k:v.tolist() for (k,v) in object.items()} for object in objects], 
+                        "filtered_object": [filtered_object]
+                    })
         
         return frames
 
@@ -215,7 +246,7 @@ def camera_stream():
     
 
     def gen(cameras):
-        frequency = 30
+        frequency = 60
         loop_interval = 1.0 / frequency
         last_run_time = 0
 
@@ -291,7 +322,7 @@ def acquire_floor(data):
 
     plane_normal = np.array([[fit[0]], [fit[1]], [-1]])
     plane_normal = plane_normal / linalg.norm(plane_normal)
-    up_normal = np.array([[0],[1],[0]], dtype=np.float32)
+    up_normal = np.array([[0],[0],[1]], dtype=np.float32)
 
     plane = np.array([fit[0], fit[1], -1, fit[2]])
 
@@ -304,20 +335,24 @@ def acquire_floor(data):
     F = np.array([plane_normal.T[0], ((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal)/linalg.norm((up_normal-np.dot(plane_normal.T,up_normal)[0][0]*plane_normal))).T[0], np.cross(up_normal.T[0],plane_normal.T[0])]).T
     R = F @ G @ linalg.inv(F)
 
+    R = R @ [[1,0,0],[0,-1,0],[0,0,1]] # i dont fucking know why
+
     cameras.to_world_coords_matrix = np.array(np.vstack((np.c_[R, [0,0,0]], [[0,0,0,1]])))
 
     socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
 
 
 @socketio.on("set-origin")
-def acquire_floor(data):
+def set_origin(data):
     cameras = Cameras.instance()
     object_point = np.array(data["objectPoint"])
     to_world_coords_matrix = np.array(data["toWorldCoordsMatrix"])
+    transform_matrix = np.eye(4)
 
-    rotated_object_point = to_world_coords_matrix[:3,:3] @ object_point
+    object_point[1], object_point[2] = object_point[2], object_point[1] # i dont fucking know why
+    transform_matrix[:3, 3] = -object_point
 
-    to_world_coords_matrix[:3,3] = -rotated_object_point
+    to_world_coords_matrix = transform_matrix @ to_world_coords_matrix
     cameras.to_world_coords_matrix = to_world_coords_matrix
 
     socketio.emit("to-world-coords-matrix", {"to_world_coords_matrix": cameras.to_world_coords_matrix.tolist()})
@@ -596,8 +631,7 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
     return np.array(errors), np.array(object_points), frames
 
 def locate_objects(object_points, errors):
-    d1 = 0.15
-    d2 = 0.1
+    dist = 0.1
 
     distance_matrix = np.zeros((object_points.shape[0], object_points.shape[0]))
     already_matched_points = []
@@ -608,31 +642,30 @@ def locate_objects(object_points, errors):
             distance_matrix[i,j] = np.sqrt(np.sum((object_points[i] - object_points[j])**2))
 
     for i in range(0, object_points.shape[0]):
-        d1_matches = np.abs(distance_matrix[i] - d1) < 0.01
-        d2_matches = np.abs(distance_matrix[i] - d2) < 0.01
-        if np.any(d1_matches) and np.any(d2_matches):
-            d1_i = np.argmax(d1_matches)
-            d2_i = np.argmax(d2_matches)
+        if i in already_matched_points:
+            continue
+
+        matches = np.abs(distance_matrix[i] - dist) < 0.025
+        if np.any(matches):
+            best_match_i = np.argmax(matches)
 
             already_matched_points.append(i)
-            already_matched_points.append(d1_i)
-            already_matched_points.append(d2_i)
+            already_matched_points.append(best_match_i)
 
-            location = object_points[i]
-            error = np.mean([errors[i], errors[d1_i], errors[d2_i]])
+            location = (object_points[i]+object_points[best_match_i])/2
+            error = np.mean([errors[i], errors[best_match_i]])
 
-            vec1 = object_points[d1_i] - object_points[i]
-            vec2 = object_points[d2_i] - object_points[i]
-            vec3 = np.cross(vec1, vec2)
-            vec1 /= linalg.norm(vec1)
-            vec2 /= linalg.norm(vec2)
-            vec3 /= linalg.norm(vec3)
-            rotation_matrix = np.vstack((vec1, vec2, vec3)).T
+            heading_vec = object_points[best_match_i] - object_points[i]
+            heading_vec /= linalg.norm(heading_vec)
+            heading = np.arctan2(heading_vec[1], heading_vec[0])
+
+            heading = heading - np.pi if heading > np.pi/2 else heading
+            heading = heading + np.pi if heading < -np.pi/2 else heading
 
             objects.append({
-                "location": location.tolist(),
-                "rotationMatrix": rotation_matrix.tolist(),
-                "error": error.tolist()
+                "pos": location,
+                "heading": -heading,
+                "error": error
             })
     
     return objects
@@ -652,7 +685,7 @@ def start_or_stop_locating_objects(data):
 def determine_scale(data):
     object_points = data["objectPoints"]
     camera_poses = data["cameraPoses"]
-    actual_distance = 0.15
+    actual_distance = 0.1
     observed_distances = []
 
     for object_points_i in object_points:

@@ -18,19 +18,22 @@ unsigned long timeArmed = 0;
 
 StaticJsonDocument<200> json;
 
-double xSetpoint, xPos, xOutput;
-double ySetpoint, yPos, yOutput;
-double zSetpoint, zPos, zOutput;
+double xSetpoint=0, xPos, xOutput;
+double ySetpoint=0, yPos, yOutput;
+double zSetpoint=0, zPos, zOutput;
+double yawSetpoint=0, yawPos, yawOutput;
 
 int xTrim=0, yTrim=0, zTrim=0, yawTrim=0;
 
-double xKp=2, xKi=5, xKd=1;
-double yKp=2, yKi=5, yKd=1;
-double zKp=2, zKi=5, zKd=1;
+double xKp=0.2, xKi=0.05, xKd=0.2;
+double yKp=0.2, yKi=0.05, yKd=0.2;
+double zKp=0.6, zKi=0.8, zKd=0.8;
+double yawKp=1, yawKi=0.2, yawKd=0.05;
 
 PID xPID(&xPos, &xOutput, &xSetpoint, xKp, xKi, xKd, DIRECT);
 PID yPID(&yPos, &yOutput, &ySetpoint, yKp, yKi, yKd, DIRECT);
 PID zPID(&zPos, &zOutput, &zSetpoint, zKp, zKi, zKd, DIRECT);
+PID yawPID(&yawPos, &yawOutput, &yawSetpoint, yawKp, yawKi, yawKd, DIRECT);
 
 unsigned long lastLoopTime = micros();
 unsigned long lastSbusSend = micros();
@@ -51,8 +54,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
   if (json.containsKey("pos")) {
     xPos = json["pos"][0];
-    yPos = -((double)json["pos"][2]);
-    zPos = json["pos"][1];
+    yPos = json["pos"][1];
+    zPos = json["pos"][2];
+    yawPos = json["pos"][3];
   }
   else if (json.containsKey("armed")) {
     if (json["armed"] != armed && json["armed"]) {
@@ -69,6 +73,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     xPID.SetTunings(json["pid"][0], json["pid"][1], json["pid"][2]);
     yPID.SetTunings(json["pid"][3], json["pid"][4], json["pid"][5]);
     zPID.SetTunings(json["pid"][6], json["pid"][7], json["pid"][8]);
+    yawPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
+    Serial.println((double)json["pid"][9]);
   }
   else if (json.containsKey("trim")) {
     xTrim = json["trim"][0];
@@ -125,9 +131,11 @@ void setup() {
   xPID.SetMode(AUTOMATIC);
   yPID.SetMode(AUTOMATIC);
   zPID.SetMode(AUTOMATIC);
+  yawPID.SetMode(AUTOMATIC);
   xPID.SetOutputLimits(-1*GAIN, 1*GAIN);
   yPID.SetOutputLimits(-1*GAIN, 1*GAIN);
   zPID.SetOutputLimits(-1*GAIN, 1*GAIN);
+  yawPID.SetOutputLimits(-1*GAIN, 1*GAIN);
 
   lastPing = micros();
   lastLoopTime = micros();
@@ -150,24 +158,27 @@ void loop() {
     xPos = xSetpoint;
     yPos = ySetpoint;
     zPos = zSetpoint;
+    yawPos = yawSetpoint;
   }
 
   xPID.Compute();
   yPID.Compute();
   zPID.Compute();
-  int xPWM = 1000 + (xOutput*811) + xTrim;
-  int yPWM = 1000 + (-yOutput*811) + yTrim;
-  int zPWM = 1000 + (zOutput*811) + zTrim;
+  yawPID.Compute();
+  int xPWM = 992 + (xOutput*811) + xTrim;
+  int yPWM = 992 + (yOutput*811) + yTrim;
+  int zPWM = 992 + (zOutput*811) + zTrim;
+  int yawPWM = 992 + (yawOutput*811) + yawTrim;
   //int zPWM = 900 + zTrim;
   zPWM = armed && millis() - timeArmed > 100 ? zPWM : 172;
-  data.ch[0] = yPWM;
+  data.ch[0] = -yPWM;
   data.ch[1] = xPWM;
   data.ch[2] = zPWM;
-  data.ch[3] = 1000 + yawTrim;
+  data.ch[3] = yawPWM;
 
   if (micros() - lastSbusSend > 1e6/sbusFrequency) {
     lastSbusSend = micros();
-    // Serial.printf("PWM x: %d, y: %d, z: %d\nPos x: %f, y: %f, z: %f\n", xPWM, yPWM, zPWM, xPos, yPos, zPos);
+    // Serial.printf("PWM x: %d, y: %d, z: %d, yaw: %d\nPos x: %f, y: %f, z: %f, yaw: %f\n", xPWM, yPWM, zPWM, yawPWM, xPos, yPos, zPos, yawPos);
     // Serial.printf("Setpoint x: %f, y: %f, z: %f\n", xSetpoint, ySetpoint, zSetpoint);
     // Serial.printf("Pos x: %f, y: %f, z: %f\n", xPos, yPos, zPos);
     //Serial.printf("Output x: %f, y: %f, z: %f\n", xOutput, yOutput, zOutput);
