@@ -16,7 +16,7 @@ bfs::SbusData data;
 bool armed = false;
 unsigned long timeArmed = 0;
 
-StaticJsonDocument<200> json;
+StaticJsonDocument<1024> json;
 
 double xSetpoint=0, xPos, xOutput;
 double ySetpoint=0, yPos, yOutput;
