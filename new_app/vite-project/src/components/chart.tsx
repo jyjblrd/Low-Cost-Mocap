@@ -48,19 +48,27 @@ export const options = {
     },
   },
   scales: {
-    yAxes: [{
-      id: 'A',
-      type: 'linear',
-      position: 'left',
-    }, {
-      id: 'B',
-      type: 'linear',
-      position: 'left',
-      ticks: {
-        max: Math.PI/2,
-        min: -Math.PI/2
+    yAxes: [
+        {
+        id: 'A',
+        type: 'linear',
+        position: 'left',
+      }, 
+      {
+        id: 'B',
+        type: 'linear',
+        position: 'left',
+        ticks: {
+          max: Math.PI/2,
+          min: -Math.PI/2
+        }
+      }, 
+      {
+        id: 'C',
+        type: 'linear',
+        position: 'left'
       }
-    }]
+    ]
   },
   elements: {
     point: {
@@ -99,9 +107,30 @@ export default function Chart({filteredPointsRef}: {filteredPointsRef: MutableRe
       {
         label: 'YAW',
         data: sliced.map((filteredPoints) => filteredPoints["heading"]),
-        borderColor: 'rgb(255, 0, 255)',
-        backgroundColor: 'rgba(255, 0, 255, 0.5)',
+        borderColor: 'rgb(128, 128, 128)',
+        backgroundColor: 'rgba(128, 128, 128, 0.5)',
         yAxisID: "B"
+      },
+      {
+        label: 'X Vel',
+        data: sliced.map((filteredPoints) => filteredPoints["vel"] ? filteredPoints["vel"][0] : undefined),
+        borderColor: 'rgb(220, 220, 0)',
+        backgroundColor: 'rgba(220, 220, 0, 0.5)',
+        yAxisID: "C"
+      },
+      {
+        label: 'Y Vel',
+        data: sliced.map((filteredPoints) => filteredPoints["vel"] ? filteredPoints["vel"][1] : undefined),
+        borderColor: 'rgb(0, 220, 220)',
+        backgroundColor: 'rgba(0, 220, 220, 0.5)',
+        yAxisID: "C"
+      },
+      {
+        label: 'Z Vel',
+        data: sliced.map((filteredPoints) => filteredPoints["vel"] ? filteredPoints["vel"][2] : undefined),
+        borderColor: 'rgb(220, 0, 220)',
+        backgroundColor: 'rgba(220, 0, 220, 0.5)',
+        yAxisID: "C"
       },
     ],
   };

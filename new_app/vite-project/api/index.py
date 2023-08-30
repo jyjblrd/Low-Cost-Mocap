@@ -10,6 +10,7 @@ from scipy import linalg, optimize, signal
 
 from flask_socketio import SocketIO, emit
 from scipy.spatial.transform import Rotation
+from scipy.signal import butter, lfilter
 import copy
 import time
 from sklearn.preprocessing import normalize
@@ -25,10 +26,34 @@ socketio = SocketIO(app, cors_allowed_origins='*')
 
 cameras_init = False
 
+class LowPassFilter:
+
+    def __init__(self, cutoff_frequency, sampling_frequency, dims, order=5, buffer_size=300):
+        self.sampling_frequency = sampling_frequency
+        self.cutoff_frequency = cutoff_frequency
+        self.order = order
+        self.buffer_size = buffer_size
+        self.buffered_data = np.empty((0, dims))
+        self.b, self.a = butter(self.order, self.cutoff_frequency / (self.sampling_frequency / 2), btype='low')
+
+    def filter(self, data):
+        self.buffered_data = np.vstack((self.buffered_data, data[np.newaxis]))
+
+        filtered_data = np.apply_along_axis(lambda x: lfilter(self.b, self.a, x), axis=0, arr=self.buffered_data)
+    
+        if self.buffered_data.shape[0] >= self.buffer_size:
+            self.buffered_data = self.buffered_data[-self.buffer_size//2:]  # Keep the last half of the buffered data for the next filtering iteration
+
+        return filtered_data[-1]
+
+
+low_pass_filter = LowPassFilter(cutoff_frequency=10, sampling_frequency=60.0, dims=3)
+heading_low_pass_filter = LowPassFilter(cutoff_frequency=3, sampling_frequency=60.0, dims=1)
+
 class KalmanFilter:
     def __init__(self):
         state_dim = 9
-        measurement_dim = 3
+        measurement_dim = 6
         dt = 0.1
 
         self.kalman = cv.KalmanFilter(state_dim, measurement_dim)
@@ -42,21 +67,25 @@ class KalmanFilter:
                                                  [0, 0, 0, 0, 0, 0, 0, 1, 0],
                                                  [0, 0, 0, 0, 0, 0, 0, 0, 1]], dtype=np.float32)
 
-        self.kalman.processNoiseCov = np.eye(state_dim, dtype=np.float32) * 0.1
-        self.kalman.measurementNoiseCov = np.eye(measurement_dim, dtype=np.float32) * 1
+        self.kalman.processNoiseCov = np.eye(state_dim, dtype=np.float32) * 1e-2
+        self.kalman.measurementNoiseCov = np.eye(measurement_dim, dtype=np.float32) * 1e0
         self.kalman.measurementMatrix = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],
                                                   [0, 1, 0, 0, 0, 0, 0, 0, 0],
-                                                  [0, 0, 1, 0, 0, 0, 0, 0, 0]], dtype=np.float32)
+                                                  [0, 0, 1, 0, 0, 0, 0, 0, 0],
+                                                  [0, 0, 0, 1, 0, 0, 0, 0, 0],
+                                                  [0, 0, 0, 0, 1, 0, 0, 0, 0],
+                                                  [0, 0, 0, 0, 0, 1, 0, 0, 0]], dtype=np.float32)
+        
+        self.kalman.statePost = np.zeros((9,1), dtype=np.float32)
         
         self.prev_measurement_time = 0
-
-        self.b = signal.firwin(30, 0.004)
-        self.z = signal.lfilter_zi(self.b, 1) * 0
+        self.prev_pos = np.array([0,0,0])
 
     def predict_location(self, possible_new_objects):
         if len(possible_new_objects) == 0:
             return {
-                "pos": [],
+                "pos": np.array([]),
+                "vel": np.array([]),
                 "heading": 0
             }
         
@@ -66,21 +95,29 @@ class KalmanFilter:
         self.prev_measurement_time = time.time()
 
         self.kalman.transitionMatrix[:3, 3:6] = dt * np.eye(3)
+        self.kalman.transitionMatrix[3:6, 6:9] = dt * np.eye(3)
         self.kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
         predicted_location = self.kalman.predict()[:3].T[0]
         distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
         closest_match_i = np.argmin(distances_to_predicted_location)
-        new_measurement = possible_new_positions[closest_match_i].astype(np.float32)
+        new_pos = possible_new_positions[closest_match_i].astype(np.float32)
+        new_vel = ((new_pos - self.prev_pos) / dt).astype(np.float32)
+        self.prev_pos = new_pos
 
-        self.kalman.correct(new_measurement)
-        predicted_state = self.kalman.statePost[:3]  # Predicted 3D location
+        self.kalman.correct(np.concatenate((new_pos, new_vel)))
+        predicted_state = self.kalman.statePre[:6].T[0]  # Predicted 3D location
 
         heading = possible_new_objects[closest_match_i]["heading"]
+        heading = heading_low_pass_filter.filter(heading)[0]
         # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
+
+        vel = predicted_state[3:6].copy()
+        vel = low_pass_filter.filter(vel)
         
         return {
-            "pos": predicted_state.T[0].tolist(),
+            "pos": predicted_state[:3],
+            "vel": vel,
             "heading": heading
         }
     
@@ -154,18 +191,29 @@ class Cameras:
                         object_points[i] = new_object_point
 
                     objects = []
-                    filtered_object = []
+                    filtered_object = {
+                        "pos": [],
+                        "vel": [],
+                        "heading": 0
+                    }
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
                         filtered_object = kalman_filter.predict_location(objects)
 
-                        if self.drone_armed and len(filtered_object["pos"]) != 0:
-                            filtered_object["pos"] = [round(x, 4) for x in filtered_object["pos"]]
-                            filtered_object["heading"] = round(filtered_object["heading"], 4)
-                            serial_data = { "pos": filtered_object["pos"] + [filtered_object["heading"]]}
-                            print(filtered_object)
-                            with serialLock:
-                                ser.write(json.dumps(serial_data).encode('utf-8'))
+                        if len(filtered_object["pos"]) != 0:
+                            if self.drone_armed:
+                                filtered_object["heading"] = round(filtered_object["heading"], 4)
+
+                                serial_data = { 
+                                    "pos": [round(x, 4) for x in filtered_object["pos"].tolist()] + [filtered_object["heading"]],
+                                    "vel": [round(x, 4) for x in filtered_object["vel"].tolist()]
+                                }
+                                print(filtered_object)
+                                with serialLock:
+                                    ser.write(json.dumps(serial_data).encode('utf-8'))
+                            
+                        filtered_object["vel"] = filtered_object["vel"].tolist()
+                        filtered_object["pos"] = filtered_object["pos"].tolist()
                     
                     socketio.emit("object-points", {
                         "object_points": object_points.tolist(), 
@@ -246,7 +294,7 @@ def camera_stream():
     
 
     def gen(cameras):
-        frequency = 60
+        frequency = 150
         loop_interval = 1.0 / frequency
         last_run_time = 0
 
@@ -631,7 +679,7 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
     return np.array(errors), np.array(object_points), frames
 
 def locate_objects(object_points, errors):
-    dist = 0.1
+    dist = 0.145
 
     distance_matrix = np.zeros((object_points.shape[0], object_points.shape[0]))
     already_matched_points = []
