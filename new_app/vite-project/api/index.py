@@ -32,6 +32,7 @@ class LowPassFilter:
         self.sampling_frequency = sampling_frequency
         self.cutoff_frequency = cutoff_frequency
         self.order = order
+        self.dims = dims
         self.buffer_size = buffer_size
         self.buffered_data = np.empty((0, dims))
         self.b, self.a = butter(self.order, self.cutoff_frequency / (self.sampling_frequency / 2), btype='low')
@@ -45,10 +46,14 @@ class LowPassFilter:
             self.buffered_data = self.buffered_data[-self.buffer_size//2:]  # Keep the last half of the buffered data for the next filtering iteration
 
         return filtered_data[-1]
+    
+    def reset(self):
+        self.buffered_data = np.empty((0, self.dims))
 
 
-low_pass_filter = LowPassFilter(cutoff_frequency=10, sampling_frequency=60.0, dims=3)
-heading_low_pass_filter = LowPassFilter(cutoff_frequency=3, sampling_frequency=60.0, dims=1)
+low_pass_filter_xy = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=2)
+low_pass_filter_z = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
+heading_low_pass_filter = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
 
 class KalmanFilter:
     def __init__(self):
@@ -113,7 +118,8 @@ class KalmanFilter:
         # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
 
         vel = predicted_state[3:6].copy()
-        vel = low_pass_filter.filter(vel)
+        vel[0:2] = low_pass_filter_xy.filter(vel[0:2])
+        vel[2] = low_pass_filter_z.filter(vel[2])[0]
         
         return {
             "pos": predicted_state[:3],
@@ -261,6 +267,9 @@ class Cameras:
         self.is_capturing_points = True
         self.is_triangulating_points = True
         self.camera_poses = camera_poses
+        low_pass_filter_xy.reset()
+        low_pass_filter_z.reset()
+        heading_low_pass_filter.reset()
 
     def stop_trangulating_points(self):
         self.is_capturing_points = False
