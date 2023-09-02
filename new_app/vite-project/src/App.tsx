@@ -29,6 +29,7 @@ export default function App() {
 
   const objectPoints = useRef<Array<Array<Array<number>>>>([])
   const filteredPoints = useRef<number[][]>([])
+  const droneSetpointHistory = useRef<number[][]>([])
   const objectPointErrors = useRef<Array<Array<number>>>([])
   const objects = useRef<Array<Array<Object>>>([])
   const [objectPointCount, setObjectPointCount] = useState(0);
@@ -37,9 +38,12 @@ export default function App() {
   const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
 
   const [droneArmed, setDroneArmed] = useState(false)
-  const [dronePID, setDronePID] = useState(["1","1","1","1","1","1","1","1","1","1","1","1"])
+  const [dronePID, setDronePID] = useState(["0.2","0.03","0.05","0.2","0.03","0.05","0.6","0.3","0.1","0.3","0.1","0.05","1","1"])
   const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
+  const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
+
+  const [motionPreset, setMotionPreset] = useState("setpoint")
 
   const updateCameraSettings: FormEventHandler = (e) => {
     e.preventDefault()
@@ -80,16 +84,78 @@ export default function App() {
   }, [droneArmed])
 
   useEffect(() => {
-    socket.emit("set-drone-setpoint", { droneSetpoint })
-  }, [droneSetpoint])
-
-  useEffect(() => {
     socket.emit("set-drone-pid", { dronePID })
   }, [dronePID])
 
   useEffect(() => {
     socket.emit("set-drone-trim", { droneTrim })
   }, [droneTrim])
+
+  useEffect(() => {
+    let timestamp = Date.now()/1000
+
+    if (motionPreset !== "setpoint") {
+      const motionInterval = setInterval(() => {
+        timestamp = Date.now()/1000
+        let tempDroneSetpoint = [] as number[]
+
+        switch (motionPreset) {
+          case "circle": {
+            const radius = 0.3
+            const period = 10
+            tempDroneSetpoint = [
+              parseFloat(droneSetpoint[0]) + radius*Math.cos(timestamp*2*Math.PI / period), 
+              parseFloat(droneSetpoint[1]) + radius*Math.sin(timestamp*2*Math.PI / period), 
+              parseFloat(droneSetpoint[2])
+            ]
+            socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
+            break;
+          }
+        
+          case "square": {
+            const size = 0.2
+            const period = 20
+            let offset = [0,0]
+            switch (Math.floor((timestamp*4)/period) % 4) {
+              case 0:
+                offset = [1,1]
+                break
+              case 1:
+                offset = [1,-1]
+                break
+              case 2:
+                offset = [-1,-1]
+                break
+              case 3:
+                offset = [-1,1]
+                break
+            }
+
+            tempDroneSetpoint = [
+              parseFloat(droneSetpoint[0]) + (offset[0] * size), 
+              parseFloat(droneSetpoint[1]) + (offset[1] * size), 
+              parseFloat(droneSetpoint[2])
+            ]
+            socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
+            break;
+          }
+
+          default:
+            break;
+        }
+
+        setDroneSetpointWithMotion(tempDroneSetpoint)
+      }, 100)
+
+      return () => {
+        clearInterval(motionInterval)
+      }
+    }
+    else {
+      setDroneSetpointWithMotion(droneSetpoint.map(x => parseFloat(x)))
+      socket.emit("set-drone-setpoint", { droneSetpoint })
+    }
+  }, [motionPreset, droneSetpoint])
 
   useEffect(() => {
     socket.on("to-world-coords-matrix", (data) => {
@@ -110,6 +176,7 @@ export default function App() {
       }
       objectPointErrors.current.push(data["errors"])
       objects.current.push(data["objects"])
+      droneSetpointHistory.current.push(droneSetpointWithMotion)
       setObjectPointCount(objectPointCount+1)
     })
 
@@ -229,6 +296,7 @@ export default function App() {
                       objectPointErrors.current = []
                       objects.current = []
                       filteredPoints.current = []
+                      droneSetpointHistory.current = []
                     }
                     setIsTriangulatingPoints(!isTriangulatingPoints);
                     startLiveMocap(isTriangulatingPoints ? "stop" : "start");
@@ -388,7 +456,7 @@ export default function App() {
                     setDroneArmed(!droneArmed);
                   }
                 }>
-                  {droneArmed ? "Stop" : "Start"}
+                  {droneArmed ? "Disarm" : "Arm"}
                 </Button>
               </Col>
             </Row>
@@ -423,6 +491,67 @@ export default function App() {
                     let newDroneSetpoint = droneSetpoint.slice()
                     newDroneSetpoint[2] = event.target.value
                     setDroneSetpoint(newDroneSetpoint)
+                  }}
+                />
+              </Col>
+            </Row><Row className='pt-2'>
+              <Col>
+                <Button
+                  size='sm' 
+                  onClick={() => {
+                    setMotionPreset("setpoint");
+                  }
+                }>
+                  Setpoint
+                </Button>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  onClick={() => {
+                    setMotionPreset("circle");
+                  }
+                }>
+                  Circle
+                </Button>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  onClick={() => {
+                    setMotionPreset("square");
+                  }
+                }>
+                  Square
+                </Button>
+              </Col>
+            </Row>
+            <Row className='pt-3'>
+              <Col xs={{offset:1}} className='text-center'>
+                XY Pos P
+              </Col>
+              <Col className='text-center'>
+                Z Pos P
+              </Col>
+            </Row>
+            <Row className='pt-2'>
+              <Col>
+                <Form.Control 
+                  value={dronePID[12]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[12] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[13]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[13] = event.target.value
+                      setDronePID(newDronePID)
                   }}
                 />
               </Col>
@@ -582,7 +711,7 @@ export default function App() {
               <Col>
                 <Form.Group className="mb-1">
                   <Form.Label>X Trim: {droneTrim[0]}</Form.Label>
-                  <Form.Range value={droneTrim[0]} min={-500} max={500} onChange={(event) => {
+                  <Form.Range value={droneTrim[0]} min={-800} max={800} onChange={(event) => {
                     let newDroneTrim = droneTrim.slice()
                     newDroneTrim[0] = event.target.value
                     setDroneTrim(newDroneTrim)
@@ -590,7 +719,7 @@ export default function App() {
                 </Form.Group>
                 <Form.Group className="mb-1">
                   <Form.Label>Y Trim: {droneTrim[1]}</Form.Label>
-                  <Form.Range value={droneTrim[1]} min={-500} max={500} onChange={(event) => {
+                  <Form.Range value={droneTrim[1]} min={-800} max={800} onChange={(event) => {
                     let newDroneTrim = droneTrim.slice()
                     newDroneTrim[1] = event.target.value
                     setDroneTrim(newDroneTrim)
@@ -598,7 +727,7 @@ export default function App() {
                 </Form.Group>
                 <Form.Group className="mb-1">
                   <Form.Label>Z Trim: {droneTrim[2]}</Form.Label>
-                  <Form.Range value={droneTrim[2]} min={-500} max={500} onChange={(event) => {
+                  <Form.Range value={droneTrim[2]} min={-800} max={800} onChange={(event) => {
                     let newDroneTrim = droneTrim.slice()
                     newDroneTrim[2] = event.target.value
                     setDroneTrim(newDroneTrim)
@@ -606,7 +735,7 @@ export default function App() {
                 </Form.Group>
                 <Form.Group className="mb-1">
                   <Form.Label>Yaw Trim: {droneTrim[3]}</Form.Label>
-                  <Form.Range value={droneTrim[3]} min={-500} max={500} onChange={(event) => {
+                  <Form.Range value={droneTrim[3]} min={-800} max={800} onChange={(event) => {
                     let newDroneTrim = droneTrim.slice()
                     newDroneTrim[3] = event.target.value
                     setDroneTrim(newDroneTrim)
@@ -620,7 +749,7 @@ export default function App() {
       <Row className='pt-3'>
         <Col>
           <Card className='shadow-sm p-3'>
-            <Chart filteredPointsRef={filteredPoints}/>
+            <Chart filteredPointsRef={filteredPoints} droneSetpointHistoryRef={droneSetpointHistory} xyPosKp={parseFloat(dronePID[12])} zPosKp={parseFloat(dronePID[13])} />
           </Card>
         </Col>
       </Row>

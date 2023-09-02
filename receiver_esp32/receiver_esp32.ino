@@ -29,8 +29,9 @@ int xTrim = 0, yTrim = 0, zTrim = 0, yawTrim = 0;
 
 double xKp = 0.2, xKi = 0.03, xKd = 0.05;
 double yKp = 0.2, yKi = 0.03, yKd = 0.05;
-double zKp = 0.6, zKi = 0.3, zKd = 0.1;
+double zKp = 0.3, zKi = 0.1, zKd = 0.05;
 double yawKp = 0.3, yawKi = 0.1, yawKd = 0.05;
+double xyPosKp = 1, zPosKp = 1.5;
 
 PID xPID(&xVel, &xOutput, &xVelSetpoint, xKp, xKi, xKd, DIRECT);
 PID yPID(&yVel, &yOutput, &yVelSetpoint, yKp, yKi, yKd, DIRECT);
@@ -60,9 +61,9 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     zPos = json["pos"][2];
     yawPos = json["pos"][3];
 
-    xVelSetpoint = xPosSetpoint - xPos;
-    yVelSetpoint = yPosSetpoint - yPos;
-    zVelSetpoint = zPosSetpoint - zPos;
+    xVelSetpoint = xyPosKp * (xPosSetpoint - xPos);
+    yVelSetpoint = xyPosKp * (yPosSetpoint - yPos);
+    zVelSetpoint = zPosKp * (zPosSetpoint - zPos);
 
     xVel = json["vel"][0];
     yVel = json["vel"][1];
@@ -81,7 +82,8 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     yPID.SetTunings(json["pid"][3], json["pid"][4], json["pid"][5]);
     zPID.SetTunings(json["pid"][6], json["pid"][7], json["pid"][8]);
     yawPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
-    Serial.println((double)json["pid"][9]);
+    xyPosKp = json["pid"][12];
+    zPosKp = json["pid"][13];
   } else if (json.containsKey("trim")) {
     xTrim = json["trim"][0];
     yTrim = json["trim"][1];
@@ -160,10 +162,18 @@ void loop() {
     data.ch[4] = 1800;
   } else {
     data.ch[4] = 172;
-    xVel = xVelSetpoint;
-    yVel = yVelSetpoint;
-    zVel = zVelSetpoint;
-    yawPos = yawSetpoint;
+    xPID.SetOutputLimits(0.0, 1.0); 
+    xPID.SetOutputLimits(-1.0, 0.0);
+    xPID.SetOutputLimits(-1.0, 1.0);
+    yPID.SetOutputLimits(0.0, 1.0); 
+    yPID.SetOutputLimits(-1.0, 0.0);
+    yPID.SetOutputLimits(-1.0, 1.0);
+    zPID.SetOutputLimits(0.0, 1.0); 
+    zPID.SetOutputLimits(-1.0, 0.0);
+    zPID.SetOutputLimits(-1.0, 1.0);
+    yawPID.SetOutputLimits(0.0, 1.0); 
+    yawPID.SetOutputLimits(-1.0, 0.0);
+    yawPID.SetOutputLimits(-1.0, 1.0);
   }
 
   xPID.Compute();
