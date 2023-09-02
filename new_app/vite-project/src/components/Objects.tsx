@@ -1,24 +1,24 @@
 import { MutableRefObject, useEffect, useRef } from "react";
-import { BufferAttribute, BufferGeometry, EdgesGeometry, InstancedMesh, LineBasicMaterial, Matrix4, Object3D } from "three";
+import { ArrowHelper, BufferAttribute, BufferGeometry, EdgesGeometry, InstancedMesh, LineBasicMaterial, Material, Matrix4, NormalBufferAttributes, Object3D, Vector3 } from "three";
 
-export default function Objects({objectsRef, count}: {objectsRef: MutableRefObject<Object[][]>, count: number}) {
-  let objects = objectsRef.current.flat()
+export default function Objects({filteredObjectsRef, count}: {filteredObjectsRef: MutableRefObject<Object[]>, count: number}) {
+  let objects = filteredObjectsRef.current.flat()
   objects = objects.length == 0 ? [] : [objects[objects.length-1]]
 
-  const instancedMeshRef = useRef<InstancedMesh>()
+  const instancedMeshRef = useRef<InstancedMesh<BufferGeometry<NormalBufferAttributes>, Material | Material[]>>()
   const temp = new Object3D()
 
+  let arrowDefaultDirection = new Vector3
+  arrowDefaultDirection.set(1,0,0)
+
+  let arrowDefaultLocation = new Vector3
+  arrowDefaultLocation.set(0,0,0)
+
   useEffect(() => {
-    objects.forEach(({location, rotationMatrix, error}, i) => {
-      console.log(location)
-      temp.position.set(location[0], location[1], location[2])
+    objects.forEach(({pos, heading}, i) => {
+      temp.position.set(pos[0], pos[2], pos[1]) // y is up in threejs
       let threeRotationMatrix = new Matrix4
-      threeRotationMatrix.set(
-        rotationMatrix[0][0], rotationMatrix[0][1], rotationMatrix[0][2], 0,
-        rotationMatrix[1][0], rotationMatrix[1][1], rotationMatrix[1][2], 0,
-        rotationMatrix[2][0], rotationMatrix[2][1], rotationMatrix[2][2], 0,
-        0, 0, 0, 1
-      )
+      threeRotationMatrix.makeRotationZ(heading)
       temp.setRotationFromMatrix(threeRotationMatrix)
       temp.updateMatrix()
       instancedMeshRef.current!.setMatrixAt(i, temp.matrix)
@@ -27,7 +27,7 @@ export default function Objects({objectsRef, count}: {objectsRef: MutableRefObje
   }, [count])
   return (
     <instancedMesh ref={instancedMeshRef} args={[undefined, undefined, objects.length]}>
-        <boxGeometry args={[0.1,0.05,0.1]}/>
+        <arrowHelper args={[arrowDefaultDirection, arrowDefaultLocation, 0.1]}/>
         <meshPhongMaterial/>
     </instancedMesh>
   )

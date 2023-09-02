@@ -28,7 +28,7 @@ export default function App() {
   const [isLocatingObjects, setIsLocatingObjects] = useState(false);
 
   const objectPoints = useRef<Array<Array<Array<number>>>>([])
-  const filteredPoints = useRef<number[][]>([])
+  const filteredObjects = useRef<number[][]>([])
   const droneSetpointHistory = useRef<number[][]>([])
   const objectPointErrors = useRef<Array<Array<number>>>([])
   const objects = useRef<Array<Array<Object>>>([])
@@ -172,7 +172,7 @@ export default function App() {
     socket.on("object-points", (data) => {
       objectPoints.current.push(data["object_points"])
       if (data["filtered_object"][0].length != 0) {
-        filteredPoints.current.push(data["filtered_object"][0])
+        filteredObjects.current.push(data["filtered_object"][0])
       }
       objectPointErrors.current.push(data["errors"])
       objects.current.push(data["objects"])
@@ -295,7 +295,7 @@ export default function App() {
                       objectPoints.current = []
                       objectPointErrors.current = []
                       objects.current = []
-                      filteredPoints.current = []
+                      filteredObjects.current = []
                       droneSetpointHistory.current = []
                     }
                     setIsTriangulatingPoints(!isTriangulatingPoints);
@@ -375,10 +375,6 @@ export default function App() {
                 </Button>
               </Col>
             </Row>
-          </Card>
-        </Col>
-        <Col xs={4}>
-          <Card className='shadow-sm p-3 h-100'>
             <Row>
               <Col xs="auto">
                 <h4>Collect points for camera pose calibration</h4>
@@ -400,16 +396,6 @@ export default function App() {
                 </a>
               </Col>
             </Row>
-            <Row>
-              <Col>
-                <Form.Control 
-                  as="textarea" 
-                  rows={5} 
-                  value={capturedPointsForPose}
-                  onChange={(event) => setCapturedPointsForPose(event.target.value)}
-                />
-              </Col>
-            </Row>
             <Row className='pt-3'>
               <Col>
                 <Button
@@ -424,7 +410,10 @@ export default function App() {
                 </Button>
               </Col> 
             </Row>
-            <Row>
+            <Row className='pt-3'>
+              <Col xs={4} className='pt-2'>
+                Camera Poses:
+              </Col>
               <Col>
                 <Form.Control 
                   value={JSON.stringify(cameraPoses)}
@@ -433,6 +422,9 @@ export default function App() {
               </Col>
             </Row>
             <Row>
+              <Col xs={4} className='pt-2'>
+                To World Matrix:
+              </Col>
               <Col>
                 <Form.Control 
                   value={JSON.stringify(toWorldCoordsMatrix)}
@@ -440,6 +432,11 @@ export default function App() {
                 />
               </Col>
             </Row>
+          </Card>
+        </Col>
+        <Col xs={4}>
+          <Card className='shadow-sm p-3 h-100'>
+            
           </Card>
         </Col>
         <Col xs={4}>
@@ -527,14 +524,11 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-              <Col xs={{offset:1}} className='text-center'>
-                XY Pos P
-              </Col>
-              <Col className='text-center'>
-                Z Pos P
-              </Col>
             </Row>
             <Row className='pt-2'>
+              <Col xs={3} className='pt-2 text-end'>
+                XY Pos P
+              </Col>
               <Col>
                 <Form.Control 
                   value={dronePID[12]}
@@ -544,6 +538,9 @@ export default function App() {
                       setDronePID(newDronePID)
                   }}
                 />
+              </Col>
+              <Col xs={3} className='pt-2 text-end'>
+                Z Pos P
               </Col>
               <Col>
                 <Form.Control 
@@ -557,7 +554,7 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-              <Col xs={{offset:1}} className='text-center'>
+              <Col xs={{offset:2}} className='text-center'>
                 P
               </Col>
               <Col className='text-center'>
@@ -568,7 +565,7 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-2'>
-              <Col xs={1} className='pt-2 text-end'>
+              <Col xs={2} className='pt-2 text-end'>
                 X
               </Col>
               <Col>
@@ -603,7 +600,7 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-              <Col xs={1} className='pt-2 text-end'>
+              <Col xs={2} className='pt-2 text-end'>
                 Y
               </Col>
               <Col>
@@ -638,7 +635,7 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-              <Col xs={1} className='pt-2 text-end'>
+              <Col xs={2} className='pt-2 text-end'>
                 Z
               </Col>
               <Col>
@@ -673,7 +670,7 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-              <Col xs={1} className='pt-2 text-end'>
+              <Col xs={2} className='pt-2 text-end'>
                 YAW
               </Col>
               <Col>
@@ -709,38 +706,54 @@ export default function App() {
             </Row>
             <Row>
               <Col>
-                <Form.Group className="mb-1">
-                  <Form.Label>X Trim: {droneTrim[0]}</Form.Label>
-                  <Form.Range value={droneTrim[0]} min={-800} max={800} onChange={(event) => {
-                    let newDroneTrim = droneTrim.slice()
-                    newDroneTrim[0] = event.target.value
-                    setDroneTrim(newDroneTrim)
-                  }}/>
-                </Form.Group>
-                <Form.Group className="mb-1">
-                  <Form.Label>Y Trim: {droneTrim[1]}</Form.Label>
-                  <Form.Range value={droneTrim[1]} min={-800} max={800} onChange={(event) => {
-                    let newDroneTrim = droneTrim.slice()
-                    newDroneTrim[1] = event.target.value
-                    setDroneTrim(newDroneTrim)
-                  }}/>
-                </Form.Group>
-                <Form.Group className="mb-1">
-                  <Form.Label>Z Trim: {droneTrim[2]}</Form.Label>
-                  <Form.Range value={droneTrim[2]} min={-800} max={800} onChange={(event) => {
-                    let newDroneTrim = droneTrim.slice()
-                    newDroneTrim[2] = event.target.value
-                    setDroneTrim(newDroneTrim)
-                  }}/>
-                </Form.Group>
-                <Form.Group className="mb-1">
-                  <Form.Label>Yaw Trim: {droneTrim[3]}</Form.Label>
-                  <Form.Range value={droneTrim[3]} min={-800} max={800} onChange={(event) => {
-                    let newDroneTrim = droneTrim.slice()
-                    newDroneTrim[3] = event.target.value
-                    setDroneTrim(newDroneTrim)
-                  }}/>
-                </Form.Group>
+                <Row className="mt-3 mb-1">
+                  <Col xs={4}>
+                    <Form.Label>X Trim: {droneTrim[0]}</Form.Label>
+                  </Col>
+                  <Col>
+                    <Form.Range value={droneTrim[0]} min={-800} max={800} onChange={(event) => {
+                      let newDroneTrim = droneTrim.slice()
+                      newDroneTrim[0] = event.target.value
+                      setDroneTrim(newDroneTrim)
+                    }}/>
+                  </Col>
+                </Row>
+                <Row className="mb-1">
+                  <Col xs={4}>
+                    <Form.Label>Y Trim: {droneTrim[1]}</Form.Label>
+                  </Col>
+                  <Col>
+                    <Form.Range value={droneTrim[1]} min={-800} max={800} onChange={(event) => {
+                      let newDroneTrim = droneTrim.slice()
+                      newDroneTrim[1] = event.target.value
+                      setDroneTrim(newDroneTrim)
+                    }}/>
+                  </Col>
+                </Row>
+                <Row className="mb-1">
+                  <Col xs={4}>
+                    <Form.Label>Z Trim: {droneTrim[2]}</Form.Label>
+                  </Col>
+                  <Col>
+                    <Form.Range value={droneTrim[2]} min={-800} max={800} onChange={(event) => {
+                      let newDroneTrim = droneTrim.slice()
+                      newDroneTrim[2] = event.target.value
+                      setDroneTrim(newDroneTrim)
+                    }}/>
+                  </Col>
+                </Row>
+                <Row className="mb-1">
+                  <Col xs={4}>
+                    <Form.Label>Yaw Trim: {droneTrim[3]}</Form.Label>
+                  </Col>
+                  <Col>
+                    <Form.Range value={droneTrim[3]} min={-800} max={800} onChange={(event) => {
+                      let newDroneTrim = droneTrim.slice()
+                      newDroneTrim[3] = event.target.value
+                      setDroneTrim(newDroneTrim)
+                    }}/>
+                  </Col>
+                </Row>
               </Col>
             </Row>
           </Card>
@@ -749,7 +762,7 @@ export default function App() {
       <Row className='pt-3'>
         <Col>
           <Card className='shadow-sm p-3'>
-            <Chart filteredPointsRef={filteredPoints} droneSetpointHistoryRef={droneSetpointHistory} xyPosKp={parseFloat(dronePID[12])} zPosKp={parseFloat(dronePID[13])} />
+            <Chart filteredObjectsRef={filteredObjects} droneSetpointHistoryRef={droneSetpointHistory} xyPosKp={parseFloat(dronePID[12])} zPosKp={parseFloat(dronePID[13])} />
           </Card>
         </Col>
       </Row>
@@ -768,11 +781,11 @@ export default function App() {
                   {cameraPoses.map(({R, t}, i) => (
                       <CameraWireframe R={R} t={t} toWorldCoordsMatrix={toWorldCoordsMatrix} key={i}/>
                   ))}
-                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount} toWorldCoordsMatrix={toWorldCoordsMatrix}/>
-                  {/* <Objects objectsRef={objects} count={objectPointCount}/> */}
+                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/>
+                  <Objects filteredObjectsRef={filteredObjects} count={objectPointCount}/>
                   <OrbitControls />
                   <axesHelper args={[0.2]}/>
-                  <gridHelper/>
+                  <gridHelper args={[3, 3*10]}/>
                 </Canvas>
               </Col>
             </Row>

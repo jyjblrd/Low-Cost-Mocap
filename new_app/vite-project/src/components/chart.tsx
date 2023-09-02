@@ -49,27 +49,20 @@ export const options = {
     },
   },
   scales: {
-    yAxes: [
-        {
-        id: 'A',
-        type: 'linear',
-        position: 'left',
-      }, 
-      {
-        id: 'B',
-        type: 'linear',
-        position: 'left',
-        ticks: {
-          max: Math.PI/2,
-          min: -Math.PI/2
-        }
-      }, 
-      {
-        id: 'C',
-        type: 'linear',
-        position: 'left'
-      }
-    ]
+    A: {
+      type: 'linear',
+      position: 'left',
+    }, 
+    B: {
+      type: 'linear',
+      position: 'left',
+      max: Math.PI/2,
+      min: -Math.PI/2
+    }, 
+    C: {
+      type: 'linear',
+      position: 'left'
+    }
   },
   elements: {
     point: {
@@ -177,19 +170,19 @@ let dataTemplate: ChartData<"line", number[], number> = {
 
 let data = structuredClone(dataTemplate)
 
-export default function Chart({filteredPointsRef, droneSetpointHistoryRef, xyPosKp, zPosKp}: 
-  {filteredPointsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, xyPosKp: number, zPosKp: number}) {
-  let sliced = filteredPointsRef.current.length <= 15 ? [] : filteredPointsRef.current.slice(15)
+export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, xyPosKp, zPosKp}: 
+  {filteredObjectsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, xyPosKp: number, zPosKp: number}) {
+  let sliced = filteredObjectsRef.current.length <= 15 ? [] : filteredObjectsRef.current.slice(15)
   let chartRef = useRef<ChartJS<"line", number[], number> | null>(null);
 
-  const length = filteredPointsRef.current.length
+  const length = filteredObjectsRef.current.length
   
   if (length === 0) {
     data = structuredClone(dataTemplate)
   }
   else {
     data.labels.push(length)
-    const lastFilteredPoint = filteredPointsRef.current[length-1]
+    const lastFilteredPoint = filteredObjectsRef.current[length-1]
 
     data.datasets[0].data.push(lastFilteredPoint["pos"][0])
     data.datasets[1].data.push(lastFilteredPoint["pos"][1])
