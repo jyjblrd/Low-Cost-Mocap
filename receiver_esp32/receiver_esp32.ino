@@ -6,8 +6,8 @@
 #include <stdint.h>
 #include "sbus.h"
 
-#define GAIN 1.0
 #define batVoltagePin 34
+#define MAX_VEL 100
 
 unsigned long lastPing;
 
@@ -19,24 +19,37 @@ unsigned long timeArmed = 0;
 
 StaticJsonDocument<1024> json;
 
-// https://github.com/iNavFlight/inav/wiki/Developer-info
-double xPosSetpoint = 0, xVelSetpoint, xVel, xPos, xOutput;
-double yPosSetpoint = 0, yVelSetpoint, yVel, yPos, yOutput;
-double zPosSetpoint = 0, zVelSetpoint, zVel, zPos, zOutput;
-double yawSetpoint = 0, yawPos, yawOutput;
-
 int xTrim = 0, yTrim = 0, zTrim = 0, yawTrim = 0;
 
-double xKp = 0.2, xKi = 0.03, xKd = 0.05;
-double yKp = 0.2, yKi = 0.03, yKd = 0.05;
-double zKp = 0.3, zKi = 0.1, zKd = 0.05;
-double yawKp = 0.3, yawKi = 0.1, yawKd = 0.05;
-double xyPosKp = 1, zPosKp = 1.5;
+// nested pid loops
+// outer: position pid loop
+// inner: velocity pid loop
+// velocity pid loop sends accel setpoint to flight controller
+double xPosSetpoint = 0, xPos;
+double yPosSetpoint = 0, yPos;
+double zPosSetpoint = 0, zPos;
+double yawPosSetpoint = 0, yawPos, yawPosOutput;
 
-PID xPID(&xVel, &xOutput, &xVelSetpoint, xKp, xKi, xKd, DIRECT);
-PID yPID(&yVel, &yOutput, &yVelSetpoint, yKp, yKi, yKd, DIRECT);
-PID zPID(&zVel, &zOutput, &zVelSetpoint, zKp, zKi, zKd, DIRECT);
-PID yawPID(&yawPos, &yawOutput, &yawSetpoint, yawKp, yawKi, yawKd, DIRECT);
+double xyPosKp = 1, xyPosKi = 0, xyPosKd = 0;
+double zPosKp = 1.5, zPosKi = 0, zPosKd = 0;
+double yawPosKp = 0.3, yawPosKi = 0.1, yawPosKd = 0.05;
+
+double xVelSetpoint, xVel, xVelOutput;
+double yVelSetpoint, yVel, yVelOutput;
+double zVelSetpoint, zVel, zVelOutput;
+
+double xyVelKp = 0.2, xyVelKi = 0.03, xyVelKd = 0.05;
+double zVelKp = 0.3, zVelKi = 0.1, zVelKd = 0.05;
+
+PID xPosPID(&xPos, &xVelSetpoint, &xPosSetpoint, xyPosKp, xyPosKi, xyPosKd, DIRECT);
+PID yPosPID(&yPos, &yVelSetpoint, &yPosSetpoint, xyPosKp, xyPosKi, xyPosKd, DIRECT);
+PID zPosPID(&zPos, &zVelSetpoint, &zPosSetpoint, zPosKp, zPosKi, zPosKd, DIRECT);
+PID yawPosPID(&yawPos, &yawPosOutput, &yawPosSetpoint, yawPosKp, yawPosKi, yawPosKd, DIRECT);
+
+PID xVelPID(&xVel, &xVelOutput, &xVelSetpoint, xyVelKp, xyVelKi, xyVelKd, DIRECT);
+PID yVelPID(&yVel, &yVelOutput, &yVelSetpoint, xyVelKp, xyVelKi, xyVelKd, DIRECT);
+PID zVelPID(&zVel, &zVelOutput, &zVelSetpoint, zVelKp, zVelKi, zVelKd, DIRECT);
+
 
 unsigned long lastLoopTime = micros();
 unsigned long lastSbusSend = micros();
@@ -61,10 +74,6 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     zPos = json["pos"][2];
     yawPos = json["pos"][3];
 
-    xVelSetpoint = xyPosKp * (xPosSetpoint - xPos);
-    yVelSetpoint = xyPosKp * (yPosSetpoint - yPos);
-    zVelSetpoint = zPosKp * (zPosSetpoint - zPos);
-
     xVel = json["vel"][0];
     yVel = json["vel"][1];
     zVel = json["vel"][2];
@@ -78,12 +87,14 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     yPosSetpoint = json["setpoint"][1];
     zPosSetpoint = json["setpoint"][2];
   } else if (json.containsKey("pid")) {
-    xPID.SetTunings(json["pid"][0], json["pid"][1], json["pid"][2]);
-    yPID.SetTunings(json["pid"][3], json["pid"][4], json["pid"][5]);
-    zPID.SetTunings(json["pid"][6], json["pid"][7], json["pid"][8]);
-    yawPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
-    xyPosKp = json["pid"][12];
-    zPosKp = json["pid"][13];
+    xPosPID.SetTunings(json["pid"][0], json["pid"][1], json["pid"][2]);
+    yPosPID.SetTunings(json["pid"][0], json["pid"][1], json["pid"][2]);
+    zPosPID.SetTunings(json["pid"][3], json["pid"][4], json["pid"][5]);
+    yawPosPID.SetTunings(json["pid"][6], json["pid"][7], json["pid"][8]);
+
+    xVelPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
+    yVelPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
+    zVelPID.SetTunings(json["pid"][12], json["pid"][13], json["pid"][14]);
   } else if (json.containsKey("trim")) {
     xTrim = json["trim"][0];
     yTrim = json["trim"][1];
@@ -92,6 +103,12 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   lastPing = micros();
+}
+
+void resetPid(PID &pid, double min, double max) {
+  pid.SetOutputLimits(0.0, 1.0); 
+  pid.SetOutputLimits(-1.0, 0.0);
+  pid.SetOutputLimits(min, max);
 }
 
 void setup() {
@@ -136,14 +153,21 @@ void setup() {
   esp_now_register_recv_cb(OnDataRecv);
 
 
-  xPID.SetMode(AUTOMATIC);
-  yPID.SetMode(AUTOMATIC);
-  zPID.SetMode(AUTOMATIC);
-  yawPID.SetMode(AUTOMATIC);
-  xPID.SetOutputLimits(-1 * GAIN, 1 * GAIN);
-  yPID.SetOutputLimits(-1 * GAIN, 1 * GAIN);
-  zPID.SetOutputLimits(-1 * GAIN, 1 * GAIN);
-  yawPID.SetOutputLimits(-1 * GAIN, 1 * GAIN);
+  xPosPID.SetMode(AUTOMATIC);
+  yPosPID.SetMode(AUTOMATIC);
+  zPosPID.SetMode(AUTOMATIC);
+  yawPosPID.SetMode(AUTOMATIC);
+  xVelPID.SetMode(AUTOMATIC);
+  yVelPID.SetMode(AUTOMATIC);
+  zVelPID.SetMode(AUTOMATIC);
+
+  xPosPID.SetOutputLimits(-MAX_VEL, MAX_VEL);
+  yPosPID.SetOutputLimits(-MAX_VEL, MAX_VEL);
+  zPosPID.SetOutputLimits(-MAX_VEL, MAX_VEL);
+  yawPosPID.SetOutputLimits(-1, 1);
+  xVelPID.SetOutputLimits(-1, 1);
+  yVelPID.SetOutputLimits(-1, 1);
+  zVelPID.SetOutputLimits(-1, 1);
 
   lastPing = micros();
   lastLoopTime = micros();
@@ -162,28 +186,27 @@ void loop() {
     data.ch[4] = 1800;
   } else {
     data.ch[4] = 172;
-    xPID.SetOutputLimits(0.0, 1.0); 
-    xPID.SetOutputLimits(-1.0, 0.0);
-    xPID.SetOutputLimits(-1.0, 1.0);
-    yPID.SetOutputLimits(0.0, 1.0); 
-    yPID.SetOutputLimits(-1.0, 0.0);
-    yPID.SetOutputLimits(-1.0, 1.0);
-    zPID.SetOutputLimits(0.0, 1.0); 
-    zPID.SetOutputLimits(-1.0, 0.0);
-    zPID.SetOutputLimits(-1.0, 1.0);
-    yawPID.SetOutputLimits(0.0, 1.0); 
-    yawPID.SetOutputLimits(-1.0, 0.0);
-    yawPID.SetOutputLimits(-1.0, 1.0);
+    resetPid(xPosPID, -MAX_VEL, MAX_VEL);
+    resetPid(yPosPID, -MAX_VEL, MAX_VEL);
+    resetPid(zPosPID, -MAX_VEL, MAX_VEL);
+    resetPid(yawPosPID, -1, 1);
+    resetPid(xVelPID, -1, 1);
+    resetPid(yVelPID, -1, 1);
+    resetPid(zVelPID, -1, 1);
   }
 
-  xPID.Compute();
-  yPID.Compute();
-  zPID.Compute();
-  yawPID.Compute();
-  int xPWM = 992 + (xOutput * 811) + xTrim;
-  int yPWM = 992 + (yOutput * 811) + yTrim;
-  int zPWM = 992 + (zOutput * 811) + zTrim;
-  int yawPWM = 992 + (yawOutput * 811) + yawTrim;
+  xPosPID.Compute();
+  yPosPID.Compute();
+  zPosPID.Compute();
+  yawPosPID.Compute();
+
+  xVelPID.Compute();
+  yVelPID.Compute();
+  zVelPID.Compute();
+  int xPWM = 992 + (xVelOutput * 811) + xTrim;
+  int yPWM = 992 + (yVelOutput * 811) + yTrim;
+  int zPWM = 992 + (zVelOutput * 811) + zTrim;
+  int yawPWM = 992 + (yawPosOutput * 811) + yawTrim;
   //int zPWM = 900 + zTrim;
   zPWM = armed && millis() - timeArmed > 100 ? zPWM : 172;
   data.ch[0] = -yPWM;
@@ -196,7 +219,7 @@ void loop() {
     // Serial.printf("PWM x: %d, y: %d, z: %d, yaw: %d\nPos x: %f, y: %f, z: %f, yaw: %f\n", xPWM, yPWM, zPWM, yawPWM, xVel, yVel, zPos, yawPos);
     // Serial.printf("Setpoint x: %f, y: %f, z: %f\n", xVelSetpoint, yVelSetpoint, zVelSetpoint);
     // Serial.printf("Pos x: %f, y: %f, z: %f\n", xVel, yVel, zPos);
-    //Serial.printf("Output x: %f, y: %f, z: %f\n", xOutput, yOutput, zOutput);
+    //Serial.printf("Output x: %f, y: %f, z: %f\n", xVelOutput, yVelOutput, zVelOutput);
 
     sbus_tx.data(data);
     sbus_tx.Write();

@@ -5586,6 +5586,11 @@ node-libs-browser@^0.7.0:
     util "^0.10.3"
     vm-browserify "0.0.4"
 
+node-pid-controller@^1.0.1:
+  version "1.0.1"
+  resolved "https://registry.yarnpkg.com/node-pid-controller/-/node-pid-controller-1.0.1.tgz#779d1a19c4a3a54284ed0d50da83bf4125f2abf5"
+  integrity sha512-36gdeRz2emhIsznLpXksJSqmR13NU3vR+rkRlfHWCGGlZu9fK+dcTPRpud0FiH6b2Nhwm0kbcVk7vXFlg8Sw1w==
+
 node-releases@^2.0.12:
   version "2.0.13"
   resolved "https://registry.yarnpkg.com/node-releases/-/node-releases-2.0.13.tgz#d5ed1627c23e3461e819b02e57b75e4899b1c81d"

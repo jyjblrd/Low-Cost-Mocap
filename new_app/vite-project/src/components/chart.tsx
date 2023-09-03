@@ -16,9 +16,11 @@ import {
   LineControllerChartOptions,
   ChartData,
 } from 'chart.js';
-import { MutableRefObject, forwardRef, useRef } from 'react';
+import { MutableRefObject, forwardRef, useEffect, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
 import { text } from 'stream/consumers';
+// @ts-ignore
+import Controller from 'node-pid-controller'
 
 ChartJS.register(
   CategoryScale,
@@ -170,47 +172,88 @@ let dataTemplate: ChartData<"line", number[], number> = {
 
 let data = structuredClone(dataTemplate)
 
-export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, xyPosKp, zPosKp}: 
-  {filteredObjectsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, xyPosKp: number, zPosKp: number}) {
-  let sliced = filteredObjectsRef.current.length <= 15 ? [] : filteredObjectsRef.current.slice(15)
+let xPosPID = new Controller();
+let yPosPID = new Controller();
+let zPosPID = new Controller();
+
+export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, objectPointCount, dronePID, droneArmed}: 
+  {filteredObjectsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, objectPointCount: number, dronePID: number[], droneArmed: boolean}) {
   let chartRef = useRef<ChartJS<"line", number[], number> | null>(null);
 
-  const length = sliced.length
-  
-  if (length === 0) {
-    data = structuredClone(dataTemplate)
-  }
-  else if (length !== data.labels![data.labels!.length - 1]) {
-    data.labels.push(length)
-    const lastFilteredPoint = sliced[length-1]
-
-    data.datasets[0].data.push(lastFilteredPoint["pos"][0])
-    data.datasets[1].data.push(lastFilteredPoint["pos"][1])
-    data.datasets[2].data.push(lastFilteredPoint["pos"][2])
-
-    data.datasets[3].data.push(lastFilteredPoint["heading"])
-    
-    if (lastFilteredPoint["vel"]) {
-      data.datasets[4].data.push(lastFilteredPoint["vel"][0])
-      data.datasets[5].data.push(lastFilteredPoint["vel"][1])
-      data.datasets[6].data.push(lastFilteredPoint["vel"][2])
+  useEffect(() => {
+    let sliced = filteredObjectsRef.current.length <= 15 ? [] : filteredObjectsRef.current.slice(15)
+    const length = sliced.length
+    if (length === 0) {
+      data = structuredClone(dataTemplate)
     }
-    else {
-      data.datasets[4].data.push(undefined)
-      data.datasets[5].data.push(undefined)
-      data.datasets[6].data.push(undefined)
-    }
-    
-    data.datasets[7].data.push(droneSetpointHistoryRef.current[length-1][0])
-    data.datasets[8].data.push(droneSetpointHistoryRef.current[length-1][1])
-    data.datasets[9].data.push(droneSetpointHistoryRef.current[length-1][2])
-    
-    data.datasets[10].data.push(xyPosKp * (droneSetpointHistoryRef.current[length-1][0] - lastFilteredPoint["pos"][0]))
-    data.datasets[11].data.push(xyPosKp * (droneSetpointHistoryRef.current[length-1][1] - lastFilteredPoint["pos"][1]))
-    data.datasets[12].data.push(zPosKp * (droneSetpointHistoryRef.current[length-1][2] - lastFilteredPoint["pos"][2]))
-  }
+    else if (length !== data.labels![data.labels!.length - 1]) {
+      data.labels.push(length)
+      const lastFilteredPoint = sliced[length-1]
   
-  chartRef.current?.update()
+      data.datasets[0].data.push(lastFilteredPoint["pos"][0])
+      data.datasets[1].data.push(lastFilteredPoint["pos"][1])
+      data.datasets[2].data.push(lastFilteredPoint["pos"][2])
+  
+      data.datasets[3].data.push(lastFilteredPoint["heading"])
+      
+      if (lastFilteredPoint["vel"]) {
+        data.datasets[4].data.push(lastFilteredPoint["vel"][0])
+        data.datasets[5].data.push(lastFilteredPoint["vel"][1])
+        data.datasets[6].data.push(lastFilteredPoint["vel"][2])
+      }
+      else {
+        data.datasets[4].data.push(undefined)
+        data.datasets[5].data.push(undefined)
+        data.datasets[6].data.push(undefined)
+      }
+      
+      data.datasets[7].data.push(droneSetpointHistoryRef.current[length-1][0])
+      data.datasets[8].data.push(droneSetpointHistoryRef.current[length-1][1])
+      data.datasets[9].data.push(droneSetpointHistoryRef.current[length-1][2])
+  
+      if (droneSetpointHistoryRef.current[length-1].length != 0) {
+        xPosPID.setTarget(droneSetpointHistoryRef.current[length-1][0])
+        yPosPID.setTarget(droneSetpointHistoryRef.current[length-1][1])
+        zPosPID.setTarget(droneSetpointHistoryRef.current[length-1][2])
+      }
+      
+      if (lastFilteredPoint["pos"].length != 0) {
+        data.datasets[10].data.push(xPosPID.update(lastFilteredPoint["pos"][0]))
+        data.datasets[11].data.push(yPosPID.update(lastFilteredPoint["pos"][1]))
+        data.datasets[12].data.push(zPosPID.update(lastFilteredPoint["pos"][2]))
+      }
+      else {
+        data.datasets[10].data.push(undefined)
+        data.datasets[11].data.push(undefined)
+        data.datasets[12].data.push(undefined)
+      }
+    }
+
+    chartRef.current?.update()
+  }, [objectPointCount])
+
+  useEffect(() => {
+    xPosPID.k_p = dronePID[0]
+    xPosPID.k_i = dronePID[1]
+    xPosPID.k_d = dronePID[2]
+
+    yPosPID.k_p = dronePID[0]
+    yPosPID.k_i = dronePID[1]
+    yPosPID.k_d = dronePID[2]
+
+    zPosPID.k_p = dronePID[3]
+    zPosPID.k_i = dronePID[4]
+    zPosPID.k_d = dronePID[5]
+  }, [dronePID])
+
+  useEffect(() => {
+    console.log(droneArmed)
+    if (droneArmed) {
+      xPosPID.reset()
+      yPosPID.reset()
+      zPosPID.reset()
+    }
+  }, [droneArmed])
 
   return <Line ref={chartRef} options={options} data={data} height={"50px"}/>;
 }

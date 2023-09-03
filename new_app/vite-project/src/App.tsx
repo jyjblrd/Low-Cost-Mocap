@@ -16,7 +16,7 @@ import Objects from './components/Objects';
 import Chart from './components/chart';
 import TrajectoryPlanningSetpoints from './components/trajectoryPlanningSetpoints';
 
-const TRAJECTORY_PLANNING_TIMESTEP = 0.1
+const TRAJECTORY_PLANNING_TIMESTEP = 0.05
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -41,7 +41,7 @@ export default function App() {
   const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9942815976609157,0.09494275516065914,-0.04888739914702052,0.10354468348466771],[-0.09494275516065914,0.5763365749707473,-0.811678523550729,1.6222294500288148],[0.04888739914702051,-0.8116785235507289,-0.5820549773098316,1.127134479418465],[0,0,0,1]])
 
   const [droneArmed, setDroneArmed] = useState(false)
-  const [dronePID, setDronePID] = useState(["0.2","0.03","0.05","0.2","0.03","0.05","0.3","0.1","0.05","0.3","0.1","0.05","1","1"])
+  const [dronePID, setDronePID] = useState(["1.5","0","0.3","1.5","0","0.2","0.3","0.1","0.05","0.2","0.03","0.1","0.3","0.1","0.05"])
   const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
@@ -51,7 +51,7 @@ export default function App() {
   const [trajectoryPlanningMaxVel, setTrajectoryPlanningMaxVel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxAccel, setTrajectoryPlanningMaxAccel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxJerk, setTrajectoryPlanningMaxJerk] = useState(["0.5", "0.5", "0.5"])
-  const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[[0.3,0.3,0.5,true],\n[-0.3,0.3,0.5,true],\n[-0.3,0.3,0.8,true],\n[-0.3,-0.3,0.8,true],\n[-0.3,-0.3,0.5,true],\n[0.3,-0.3,0.5,true],\n[0.3,-0.3,0.8,true],\n[0.3,0.3,0.8,true],\n[0.3,0.3,0.5,true]\n]")
+  const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[[0.2,0.2,0.5,true],\n[-0.2,0.2,0.5,true],\n[-0.2,0.2,0.8,true],\n[-0.2,-0.2,0.8,true],\n[-0.2,-0.2,0.5,true],\n[0.2,-0.2,0.5,true],\n[0.2,-0.2,0.8,true],\n[0.2,0.2,0.8,true],\n[0.2,0.2,0.5,true]\n]")
   const [trajectoryPlanningSetpoints, setTrajectoryPlanningSetpoints] = useState<number[][]>([])
   const [trajectoryPlanningRunStartTimestamp, setTrajectoryPlanningRunStartTimestamp] = useState(0)
 
@@ -122,6 +122,7 @@ export default function App() {
               parseFloat(droneSetpoint[1]) + radius*Math.sin(timestamp*2*Math.PI / period), 
               parseFloat(droneSetpoint[2])
             ]
+            tempDroneSetpoint.map(x => x.toFixed(3))
             socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
             break;
           }
@@ -150,6 +151,7 @@ export default function App() {
               parseFloat(droneSetpoint[1]) + (offset[1] * size), 
               parseFloat(droneSetpoint[2])
             ]
+            tempDroneSetpoint.map(x => x.toFixed(3))
             socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
             break;
           }
@@ -158,6 +160,7 @@ export default function App() {
             const index = Math.floor((timestamp - trajectoryPlanningRunStartTimestamp) / TRAJECTORY_PLANNING_TIMESTEP)
             if (index < trajectoryPlanningSetpoints.length) {
               tempDroneSetpoint = trajectoryPlanningSetpoints[index]
+              tempDroneSetpoint.map(x => x.toFixed(3))
               socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
             }
             else {
@@ -261,6 +264,7 @@ export default function App() {
     )
     
     for await (const setpoint of setpoints) {
+      setpoint.map(x => x.toFixed(3))
       socket.emit("set-drone-setpoint", { "droneSetpoint": setpoint })
       setDroneSetpointWithMotion(setpoint)
       await wait(TRAJECTORY_PLANNING_TIMESTEP*1000)
@@ -757,49 +761,19 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
-            </Row>
-            <Row className='pt-2'>
-              <Col xs={3} className='pt-2 text-end'>
-                XY Pos P
-              </Col>
-              <Col>
-                <Form.Control 
-                  value={dronePID[12]}
-                  onChange={(event) => {
-                      let newDronePID = dronePID.slice()
-                      newDronePID[12] = event.target.value
-                      setDronePID(newDronePID)
-                  }}
-                />
-              </Col>
-              <Col xs={3} className='pt-2 text-end'>
-                Z Pos P
-              </Col>
-              <Col>
-                <Form.Control 
-                  value={dronePID[13]}
-                  onChange={(event) => {
-                      let newDronePID = dronePID.slice()
-                      newDronePID[13] = event.target.value
-                      setDronePID(newDronePID)
-                  }}
-                />
-              </Col>
-            </Row>
-            <Row className='pt-3'>
               <Col xs={{offset:2}} className='text-center'>
-                P
+                Pos P
               </Col>
               <Col className='text-center'>
-                I
+                Pos I
               </Col>
               <Col className='text-center'>
-                D
+                Pos D
               </Col>
             </Row>
             <Row className='pt-2'>
               <Col xs={2} className='pt-2 text-end'>
-                X
+                XY
               </Col>
               <Col>
                 <Form.Control 
@@ -834,7 +808,7 @@ export default function App() {
             </Row>
             <Row className='pt-3'>
               <Col xs={2} className='pt-2 text-end'>
-                Y
+                Z
               </Col>
               <Col>
                 <Form.Control 
@@ -869,7 +843,7 @@ export default function App() {
             </Row>
             <Row className='pt-3'>
               <Col xs={2} className='pt-2 text-end'>
-                Z
+                YAW
               </Col>
               <Col>
                 <Form.Control 
@@ -903,8 +877,19 @@ export default function App() {
               </Col>
             </Row>
             <Row className='pt-3'>
+              <Col xs={{offset:2}} className='text-center'>
+                Vel P
+              </Col>
+              <Col className='text-center'>
+                Vel I
+              </Col>
+              <Col className='text-center'>
+                Vel D
+              </Col>
+            </Row>
+            <Row className='pt-2'>
               <Col xs={2} className='pt-2 text-end'>
-                YAW
+                XY
               </Col>
               <Col>
                 <Form.Control 
@@ -932,6 +917,41 @@ export default function App() {
                   onChange={(event) => {
                       let newDronePID = dronePID.slice()
                       newDronePID[11] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+            </Row>
+            <Row className='pt-3'>
+              <Col xs={2} className='pt-2 text-end'>
+                Z
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[12]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[12] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[13]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[13] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[14]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[14] = event.target.value
                       setDronePID(newDronePID)
                   }}
                 />
@@ -995,7 +1015,7 @@ export default function App() {
       <Row className='pt-3'>
         <Col>
           <Card className='shadow-sm p-3'>
-            <Chart filteredObjectsRef={filteredObjects} droneSetpointHistoryRef={droneSetpointHistory} xyPosKp={parseFloat(dronePID[12])} zPosKp={parseFloat(dronePID[13])} />
+            <Chart filteredObjectsRef={filteredObjects} droneSetpointHistoryRef={droneSetpointHistory} objectPointCount={objectPointCount} dronePID={dronePID.map(x => parseFloat(x))} droneArmed={droneArmed} />
           </Card>
         </Col>
       </Row>
