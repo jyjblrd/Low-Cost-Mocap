@@ -175,14 +175,14 @@ export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, xyPo
   let sliced = filteredObjectsRef.current.length <= 15 ? [] : filteredObjectsRef.current.slice(15)
   let chartRef = useRef<ChartJS<"line", number[], number> | null>(null);
 
-  const length = filteredObjectsRef.current.length
+  const length = sliced.length
   
   if (length === 0) {
     data = structuredClone(dataTemplate)
   }
-  else {
+  else if (length !== data.labels![data.labels!.length - 1]) {
     data.labels.push(length)
-    const lastFilteredPoint = filteredObjectsRef.current[length-1]
+    const lastFilteredPoint = sliced[length-1]
 
     data.datasets[0].data.push(lastFilteredPoint["pos"][0])
     data.datasets[1].data.push(lastFilteredPoint["pos"][1])

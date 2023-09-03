@@ -16,12 +16,16 @@ import time
 from sklearn.preprocessing import normalize
 import serial
 import threading
+from ruckig import InputParameter, OutputParameter, Result, Ruckig
+from flask_cors import CORS
+import json
 
 serialLock = threading.Lock()
 
 ser = serial.Serial("/dev/cu.usbserial-02X2K2GE", 460800, write_timeout=1, )
 
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins='*')
 
 cameras_init = False
@@ -126,6 +130,11 @@ class KalmanFilter:
             "vel": vel,
             "heading": heading
         }
+    
+    def reset(self):
+        self.kalman.statePost = np.zeros((9,1), dtype=np.float32)
+        self.prev_measurement_time = time.time()-20
+        self.prev_pos = np.array([0,0,0])
     
 kalman_filter = KalmanFilter()
 
@@ -270,6 +279,7 @@ class Cameras:
         low_pass_filter_xy.reset()
         low_pass_filter_z.reset()
         heading_low_pass_filter.reset()
+        kalman_filter.reset()
 
     def stop_trangulating_points(self):
         self.is_capturing_points = False
@@ -320,6 +330,59 @@ def camera_stream():
 
     return Response(gen(cameras), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route("/api/trajectory-planning", methods=["POST"])
+def trajectory_planning_api():
+    data = json.loads(request.data)
+
+    waypoint_groups = [] # grouped by continuious movement (no stopping)
+    for waypoint in data["waypoints"]:
+        stop_at_waypoint = waypoint[3]
+        if stop_at_waypoint:
+            waypoint_groups.append([waypoint[:3]])
+        else:
+            waypoint_groups[-1].append(waypoint[:3])
+    
+    setpoints = []
+    for i in range(0, len(waypoint_groups)-1):
+        start_pos = waypoint_groups[i][0]
+        end_pos = waypoint_groups[i+1][0]
+        waypoints = waypoint_groups[i][1:]
+        setpoints += plan_trajectory(start_pos, end_pos, waypoints, data["maxVel"], data["maxAccel"], data["maxJerk"], data["timestep"])
+
+    return json.dumps({
+        "setpoints": setpoints
+    })
+
+def plan_trajectory(start_pos, end_pos, waypoints, max_vel, max_accel, max_jerk, timestep):
+
+    print(waypoints)
+
+    otg = Ruckig(3, timestep, len(waypoints))  # DoFs, timestep, number of waypoints
+    inp = InputParameter(3)
+    out = OutputParameter(3, len(waypoints))
+
+    inp.current_position = start_pos
+    inp.current_velocity = [0,0,0]
+    inp.current_acceleration = [0,0,0]
+
+    inp.target_position = end_pos
+    inp.target_velocity = [0,0,0]
+    inp.target_acceleration = [0,0,0]
+
+    inp.intermediate_positions = waypoints
+
+    inp.max_velocity = max_vel
+    inp.max_acceleration = max_accel
+    inp.max_jerk = max_jerk
+
+    setpoints = []
+    res = Result.Working
+    while res == Result.Working:
+        res = otg.update(inp, out)
+        setpoints.append(copy.copy(out.new_position))
+        out.pass_to_input(inp)
+
+    return setpoints
 
 @socketio.on("arm-drone")
 def arm_drone(data):

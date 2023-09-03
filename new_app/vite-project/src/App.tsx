@@ -14,6 +14,9 @@ import { socket } from './shared/styles/scripts/socket';
 import { matrix, mean, multiply, rotationMatrix } from 'mathjs';
 import Objects from './components/Objects';
 import Chart from './components/chart';
+import TrajectoryPlanningSetpoints from './components/trajectoryPlanningSetpoints';
+
+const TRAJECTORY_PLANNING_TIMESTEP = 0.1
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -34,16 +37,23 @@ export default function App() {
   const objects = useRef<Array<Array<Object>>>([])
   const [objectPointCount, setObjectPointCount] = useState(0);
 
-  const [cameraPoses, setCameraPoses] = useState<Array<object>>([])
-  const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+  const [cameraPoses, setCameraPoses] = useState<Array<object>>([{"R":[[1,0,0],[0,1,0],[0,0,1]],"t":[0,0,0]},{"R":[[-0.33810058175248126,-0.8040898942376552,0.4890065833948558],[0.5912014166131293,0.2228121572036264,0.7751358768608865],[-0.7322355369778653,0.5511752757400705,0.4000461645855317]],"t":[-1.0446560133777103,-1.368361181974505,0.9245994307978943]},{"R":[[-0.9996813814191353,0.016997713720127892,-0.018660476205532194],[-0.021175272698429073,-0.1623697699050316,0.9865027448756205],[0.013738394013705585,0.9865835674433641,0.1626779671026427]],"t":[0.1637670772690898,-1.8010250272467079,1.7655614019206678]},{"R":[[-0.4178576031881793,0.6113114101039063,-0.6720813814818882],[-0.6711687591211117,0.29086707628851355,0.681856906330939],[0.6123132533578355,0.7359991194343547,0.28875210121174416]],"t":[1.6553339812454162,-1.2408297826423254,1.9178643504593422]}])
+  const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9942815976609157,0.09494275516065914,-0.04888739914702052,0.10354468348466771],[-0.09494275516065914,0.5763365749707473,-0.811678523550729,1.6222294500288148],[0.04888739914702051,-0.8116785235507289,-0.5820549773098316,1.127134479418465],[0,0,0,1]])
 
   const [droneArmed, setDroneArmed] = useState(false)
-  const [dronePID, setDronePID] = useState(["0.2","0.03","0.05","0.2","0.03","0.05","0.6","0.3","0.1","0.3","0.1","0.05","1","1"])
+  const [dronePID, setDronePID] = useState(["0.2","0.03","0.05","0.2","0.03","0.05","0.3","0.1","0.05","0.3","0.1","0.05","1","1"])
   const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
 
   const [motionPreset, setMotionPreset] = useState("setpoint")
+
+  const [trajectoryPlanningMaxVel, setTrajectoryPlanningMaxVel] = useState(["1", "1", "1"])
+  const [trajectoryPlanningMaxAccel, setTrajectoryPlanningMaxAccel] = useState(["1", "1", "1"])
+  const [trajectoryPlanningMaxJerk, setTrajectoryPlanningMaxJerk] = useState(["0.5", "0.5", "0.5"])
+  const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[[0.3,0.3,0.5,true],\n[-0.3,0.3,0.5,true],\n[-0.3,0.3,0.8,true],\n[-0.3,-0.3,0.8,true],\n[-0.3,-0.3,0.5,true],\n[0.3,-0.3,0.5,true],\n[0.3,-0.3,0.8,true],\n[0.3,0.3,0.8,true],\n[0.3,0.3,0.5,true]\n]")
+  const [trajectoryPlanningSetpoints, setTrajectoryPlanningSetpoints] = useState<number[][]>([])
+  const [trajectoryPlanningRunStartTimestamp, setTrajectoryPlanningRunStartTimestamp] = useState(0)
 
   const updateCameraSettings: FormEventHandler = (e) => {
     e.preventDefault()
@@ -100,6 +110,10 @@ export default function App() {
         let tempDroneSetpoint = [] as number[]
 
         switch (motionPreset) {
+          case "none": {
+            break;
+          }
+
           case "circle": {
             const radius = 0.3
             const period = 10
@@ -140,12 +154,24 @@ export default function App() {
             break;
           }
 
+          case "plannedTrajectory": {
+            const index = Math.floor((timestamp - trajectoryPlanningRunStartTimestamp) / TRAJECTORY_PLANNING_TIMESTEP)
+            if (index < trajectoryPlanningSetpoints.length) {
+              tempDroneSetpoint = trajectoryPlanningSetpoints[index]
+              socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
+            }
+            else {
+              setMotionPreset("setpoint")
+            }
+            break;
+          }
+
           default:
             break;
         }
 
         setDroneSetpointWithMotion(tempDroneSetpoint)
-      }, 100)
+      }, TRAJECTORY_PLANNING_TIMESTEP*1000)
 
       return () => {
         clearInterval(motionInterval)
@@ -155,7 +181,7 @@ export default function App() {
       setDroneSetpointWithMotion(droneSetpoint.map(x => parseFloat(x)))
       socket.emit("set-drone-setpoint", { droneSetpoint })
     }
-  }, [motionPreset, droneSetpoint])
+  }, [motionPreset, droneSetpoint, trajectoryPlanningRunStartTimestamp])
 
   useEffect(() => {
     socket.on("to-world-coords-matrix", (data) => {
@@ -196,12 +222,49 @@ export default function App() {
     }
   }, [])
 
-  const toHomogeneous = (point3: number[]) => {
-    return [...point3, 1]
+  const planTrajectory = async (waypoints: object, maxVel: number[], maxAccel: number[], maxJerk: number[], timestep: number) => {
+    const location = window.location.hostname;
+    const settings = {
+        method: 'POST',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          waypoints,
+          maxVel,
+          maxAccel,
+          maxJerk,
+          timestep
+        })
+    };
+    const fetchResponse = await fetch(`http://localhost:3001/api/trajectory-planning`, settings);
+    const data = await fetchResponse.json();
+
+    return data.setpoints
   }
 
-  const fromHomogeneous = (point4: number[]) => {
-    return point4.slice(0,3).map(x => x/point4[3])
+  const wait = async (ms: number) => new Promise(r=>setTimeout(r,ms))
+
+  const moveToPos = async (pos: number[]) => {
+    console.log(filteredObjects.current[filteredObjects.current.length-1])
+    const waypoints = [
+      filteredObjects.current[filteredObjects.current.length-1]["pos"].concat([true]),
+      pos.concat([true])
+    ]
+    const setpoints = await planTrajectory(
+      waypoints, 
+      trajectoryPlanningMaxVel.map(x => parseFloat(x)),
+      trajectoryPlanningMaxAccel.map(x => parseFloat(x)),
+      trajectoryPlanningMaxJerk.map(x => parseFloat(x)),
+      TRAJECTORY_PLANNING_TIMESTEP
+    )
+    
+    for await (const setpoint of setpoints) {
+      socket.emit("set-drone-setpoint", { "droneSetpoint": setpoint })
+      setDroneSetpointWithMotion(setpoint)
+      await wait(TRAJECTORY_PLANNING_TIMESTEP*1000)
+    }
   }
 
   const calculateCameraPose = async (cameraPoints: Array<Array<Array<number>>>) => {
@@ -245,8 +308,8 @@ export default function App() {
                   variant={cameraStreamRunning ? "outline-danger" : "outline-primary"}
                   onClick={() => {
                     setCameraStreamRunning(!cameraStreamRunning);
-                  }
-                }>
+                  }}
+                >
                   {cameraStreamRunning ? "Stop" : "Start"}
                 </Button>
               </Col>
@@ -436,7 +499,177 @@ export default function App() {
         </Col>
         <Col xs={4}>
           <Card className='shadow-sm p-3 h-100'>
-            
+            <Row>
+              <Col>
+                <h4>Generate Trajectory</h4>
+              </Col>
+            </Row>
+            <Row className='pt-1'>
+              <Col xs={{offset:3}} className='text-center'>
+                X
+              </Col>
+              <Col className='text-center'>
+                Y
+              </Col>
+              <Col className='text-center'>
+                Z
+              </Col>
+            </Row>
+            <Row className='pt-2'>
+              <Col xs={3} className='pt-2 text-end'>
+                Max Vel
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxVel[0]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxVel = trajectoryPlanningMaxVel.slice()
+                      newTrajectoryPlanningMaxVel[0] = event.target.value
+                      setTrajectoryPlanningMaxVel(newTrajectoryPlanningMaxVel)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxVel[1]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxVel = trajectoryPlanningMaxVel.slice()
+                      newTrajectoryPlanningMaxVel[1] = event.target.value
+                      setTrajectoryPlanningMaxVel(newTrajectoryPlanningMaxVel)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxVel[2]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxVel = trajectoryPlanningMaxVel.slice()
+                      newTrajectoryPlanningMaxVel[2] = event.target.value
+                      setTrajectoryPlanningMaxVel(newTrajectoryPlanningMaxVel)
+                  }}
+                />
+              </Col>
+            </Row>
+            <Row className='pt-2'>
+              <Col xs={3} className='pt-2 text-end'>
+                Max Accel
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxAccel[0]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxAccel = trajectoryPlanningMaxAccel.slice()
+                      newTrajectoryPlanningMaxAccel[0] = event.target.value
+                      setTrajectoryPlanningMaxAccel(newTrajectoryPlanningMaxAccel)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxAccel[1]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxAccel = trajectoryPlanningMaxAccel.slice()
+                      newTrajectoryPlanningMaxAccel[1] = event.target.value
+                      setTrajectoryPlanningMaxAccel(newTrajectoryPlanningMaxAccel)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxAccel[2]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxAccel = trajectoryPlanningMaxAccel.slice()
+                      newTrajectoryPlanningMaxAccel[2] = event.target.value
+                      setTrajectoryPlanningMaxAccel(newTrajectoryPlanningMaxAccel)
+                  }}
+                />
+              </Col>
+            </Row>
+            <Row className='pt-2'>
+              <Col xs={3} className='pt-2 text-end'>
+                Max Jerk
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxJerk[0]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxJerk = trajectoryPlanningMaxJerk.slice()
+                      newTrajectoryPlanningMaxJerk[0] = event.target.value
+                      setTrajectoryPlanningMaxJerk(newTrajectoryPlanningMaxJerk)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxJerk[1]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxJerk = trajectoryPlanningMaxJerk.slice()
+                      newTrajectoryPlanningMaxJerk[1] = event.target.value
+                      setTrajectoryPlanningMaxJerk(newTrajectoryPlanningMaxJerk)
+                  }}
+                />
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={trajectoryPlanningMaxJerk[2]}
+                  onChange={(event) => {
+                      let newTrajectoryPlanningMaxJerk = trajectoryPlanningMaxJerk.slice()
+                      newTrajectoryPlanningMaxJerk[2] = event.target.value
+                      setTrajectoryPlanningMaxJerk(newTrajectoryPlanningMaxJerk)
+                  }}
+                />
+              </Col>
+            </Row>
+            <Row className='pt-3'>
+              <Col>
+                Waypoints <code>[x, y, z, stop at waypoint]</code>
+              </Col>
+            </Row>
+            <Row className='pt-1'>
+              <Col>
+                <Form.Control 
+                  as="textarea" 
+                  rows={5} 
+                  value={trajectoryPlanningWaypoints}
+                  onChange={(event) => setTrajectoryPlanningWaypoints(event.target.value)}
+                />
+              </Col>
+            </Row>
+            <Row className='pt-3'>
+              <Col>
+                <Button
+                  size='sm' 
+                  className='float-end'
+                  variant={droneArmed ? "outline-danger" : "outline-primary"}
+                  onClick={async () => {
+                    setMotionPreset("none")
+                    const initPos = JSON.parse(trajectoryPlanningWaypoints)[0].slice(0,3)
+                    await moveToPos(initPos)
+                    setTrajectoryPlanningRunStartTimestamp(Date.now()/1000)
+                    setMotionPreset("plannedTrajectory")
+                  }}
+                >
+                  Run
+                </Button>
+                <Button
+                  size='sm' 
+                  className='float-end me-2'
+                  variant={droneArmed ? "outline-danger" : "outline-primary"}
+                  onClick={async () => {
+                    const tempSetpoints = await planTrajectory(
+                      JSON.parse(trajectoryPlanningWaypoints),
+                      trajectoryPlanningMaxVel.map(x => parseFloat(x)),
+                      trajectoryPlanningMaxAccel.map(x => parseFloat(x)),
+                      trajectoryPlanningMaxJerk.map(x => parseFloat(x)),
+                      TRAJECTORY_PLANNING_TIMESTEP
+                    )
+                    setTrajectoryPlanningSetpoints(tempSetpoints)
+                  }}
+                >
+                  Preview
+                </Button>
+              </Col>
+            </Row>
           </Card>
         </Col>
         <Col xs={4}>
@@ -776,16 +1009,18 @@ export default function App() {
             </Row>
             <Row>
               <Col style={{height: "1000px"}}>
-                <Canvas>
+                <Canvas orthographic camera={{ zoom: 1000, position: [0, 0, 10] }}>
                   <ambientLight/>
                   {cameraPoses.map(({R, t}, i) => (
                       <CameraWireframe R={R} t={t} toWorldCoordsMatrix={toWorldCoordsMatrix} key={i}/>
                   ))}
-                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/>
+                  {/* <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/> */}
                   <Objects filteredObjectsRef={filteredObjects} count={objectPointCount}/>
+                  <TrajectoryPlanningSetpoints trajectoryPlanningSetpoints={trajectoryPlanningSetpoints}/>
                   <OrbitControls />
                   <axesHelper args={[0.2]}/>
-                  <gridHelper args={[3, 3*10]}/>
+                  <gridHelper args={[4, 4*10]}/>
+                  <directionalLight/>
                 </Canvas>
               </Col>
             </Row>
