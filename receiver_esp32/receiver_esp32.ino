@@ -8,6 +8,7 @@
 
 #define batVoltagePin 34
 #define MAX_VEL 100
+#define ROTOR_RADIUS 0.0225
 
 unsigned long lastPing;
 
@@ -20,6 +21,8 @@ unsigned long timeArmed = 0;
 StaticJsonDocument<1024> json;
 
 int xTrim = 0, yTrim = 0, zTrim = 0, yawTrim = 0;
+
+double groundEffectCoef = 28, groundEffectOffset = -0.035;
 
 // nested pid loops
 // outer: position pid loop
@@ -54,7 +57,7 @@ PID zVelPID(&zVel, &zVelOutput, &zVelSetpoint, zVelKp, zVelKi, zVelKd, DIRECT);
 unsigned long lastLoopTime = micros();
 unsigned long lastSbusSend = micros();
 float loopFrequency = 2000.0;
-float sbusFrequency = 50.0;
+float sbusFrequency = 100.0;
 
 uint8_t newMACAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A };
 
@@ -95,6 +98,9 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     xVelPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
     yVelPID.SetTunings(json["pid"][9], json["pid"][10], json["pid"][11]);
     zVelPID.SetTunings(json["pid"][12], json["pid"][13], json["pid"][14]);
+
+    groundEffectCoef = json["pid"][15];
+    groundEffectOffset = json["pid"][16];
   } else if (json.containsKey("trim")) {
     xTrim = json["trim"][0];
     yTrim = json["trim"][1];
@@ -207,7 +213,7 @@ void loop() {
   int yPWM = 992 + (yVelOutput * 811) + yTrim;
   int zPWM = 992 + (zVelOutput * 811) + zTrim;
   int yawPWM = 992 + (yawPosOutput * 811) + yawTrim;
-  //int zPWM = 900 + zTrim;
+  zPWM *= 1 - groundEffectCoef*pow(((2*ROTOR_RADIUS) / (4*(zPos-groundEffectOffset))), 2); // ground effect compensation
   zPWM = armed && millis() - timeArmed > 100 ? zPWM : 172;
   data.ch[0] = -yPWM;
   data.ch[1] = xPWM;

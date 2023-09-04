@@ -17,6 +17,7 @@ import Chart from './components/chart';
 import TrajectoryPlanningSetpoints from './components/trajectoryPlanningSetpoints';
 
 const TRAJECTORY_PLANNING_TIMESTEP = 0.05
+const LAND_Z_HEIGHT = 0.075
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -41,7 +42,7 @@ export default function App() {
   const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9942815976609157,0.09494275516065914,-0.04888739914702052,0.10354468348466771],[-0.09494275516065914,0.5763365749707473,-0.811678523550729,1.6222294500288148],[0.04888739914702051,-0.8116785235507289,-0.5820549773098316,1.127134479418465],[0,0,0,1]])
 
   const [droneArmed, setDroneArmed] = useState(false)
-  const [dronePID, setDronePID] = useState(["1.5","0","0.3","1.5","0","0.2","0.3","0.1","0.05","0.2","0.03","0.1","0.3","0.1","0.05"])
+  const [dronePID, setDronePID] = useState(["1.5","0","0.3","1.5","0","0.2","0.3","0.1","0.05","0.2","0.03","0.1","0.3","0.1","0.05","28","-0.035"])
   const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
@@ -81,8 +82,8 @@ export default function App() {
   }, [capturedPointsForPose])
 
   useEffect(() => {
-    socket.emit("arm-drone", { droneArmed })
     let count = 0
+    socket.emit("arm-drone", { droneArmed, count })
     const pingInterval = setInterval(() => {
       count += 1
       socket.emit("arm-drone", { droneArmed, count })
@@ -249,7 +250,7 @@ export default function App() {
 
   const wait = async (ms: number) => new Promise(r=>setTimeout(r,ms))
 
-  const moveToPos = async (pos: number[]) => {
+  const moveToPos = async (pos: number[], land: boolean = false, landThreshold: number = 0) => {
     console.log(filteredObjects.current[filteredObjects.current.length-1])
     const waypoints = [
       filteredObjects.current[filteredObjects.current.length-1]["pos"].concat([true]),
@@ -263,10 +264,15 @@ export default function App() {
       TRAJECTORY_PLANNING_TIMESTEP
     )
     
-    for await (const setpoint of setpoints) {
+    for await (const [i, setpoint] of setpoints.entries()) {
       setpoint.map(x => x.toFixed(3))
       socket.emit("set-drone-setpoint", { "droneSetpoint": setpoint })
       setDroneSetpointWithMotion(setpoint)
+
+      // if (land && i > 0.75*setpoints.length && filteredObjects.current[filteredObjects.current.length-1]["vel"][2] >= -0.2) {
+      //   setDroneArmed(false)
+      // }
+
       await wait(TRAJECTORY_PLANNING_TIMESTEP*1000)
     }
   }
@@ -686,6 +692,7 @@ export default function App() {
                 <Button
                   size='sm' 
                   variant={droneArmed ? "outline-danger" : "outline-primary"}
+                  disabled={!isTriangulatingPoints}
                   onClick={() => {
                     setDroneArmed(!droneArmed);
                   }
@@ -757,6 +764,18 @@ export default function App() {
                   }
                 }>
                   Square
+                </Button>
+              </Col>
+              <Col>
+                <Button
+                  size='sm' 
+                  onClick={async () => {
+                    await moveToPos([0,0,LAND_Z_HEIGHT], true, LAND_Z_HEIGHT+0.1)
+                    setDroneArmed(false)
+                    setMotionPreset("setpoint")
+                  }
+                }>
+                  Land
                 </Button>
               </Col>
             </Row>
@@ -1007,6 +1026,34 @@ export default function App() {
                     }}/>
                   </Col>
                 </Row>
+              </Col>
+            </Row>
+            <Row className='pt-3'>
+              <Col className='pt-2'>
+                Ground Effect Coef.
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[15]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[15] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
+              </Col>
+              <Col className='pt-2'>
+                Ground Effect Offset
+              </Col>
+              <Col>
+                <Form.Control 
+                  value={dronePID[16]}
+                  onChange={(event) => {
+                      let newDronePID = dronePID.slice()
+                      newDronePID[16] = event.target.value
+                      setDronePID(newDronePID)
+                  }}
+                />
               </Col>
             </Row>
           </Card>
