@@ -223,7 +223,6 @@ class Cameras:
                                     "pos": [round(x, 4) for x in filtered_object["pos"].tolist()] + [filtered_object["heading"]],
                                     "vel": [round(x, 4) for x in filtered_object["vel"].tolist()]
                                 }
-                                print(filtered_object)
                                 with serialLock:
                                     ser.write(json.dumps(serial_data).encode('utf-8'))
                             
@@ -316,9 +315,15 @@ def camera_stream():
         frequency = 150
         loop_interval = 1.0 / frequency
         last_run_time = 0
+        i = 0
 
         while True:
             time_now = time.time()
+
+            i = (i+1)%10
+            if i == 0:
+                socketio.emit("fps", {"fps": round(1/(time_now - last_run_time))})
+                
             if time_now - last_run_time < loop_interval:
                 time.sleep(last_run_time - time_now + loop_interval)
             last_run_time = time.time()
@@ -354,8 +359,6 @@ def trajectory_planning_api():
     })
 
 def plan_trajectory(start_pos, end_pos, waypoints, max_vel, max_accel, max_jerk, timestep):
-
-    print(waypoints)
 
     otg = Ruckig(3, timestep, len(waypoints))  # DoFs, timestep, number of waypoints
     inp = InputParameter(3)
@@ -395,7 +398,6 @@ def arm_drone(data):
         "armed": data["droneArmed"],
     }
     with serialLock:
-        print(data["count"])
         ser.write(json.dumps(serial_data).encode('utf-8'))
 
 @socketio.on("set-drone-pid")
@@ -628,10 +630,8 @@ def bundle_adjustment(image_points, camera_poses):
         init_params = np.concatenate([init_params, camera_pose["t"].flatten()])
 
     res = optimize.least_squares(
-        residual_function, init_params, verbose=2, ftol=1e-2
+        residual_function, init_params, verbose=2, loss="soft_l1"
     )
-
-    print(res.x)
     return params_to_camera_poses(res.x)[0]
     
 def triangulate_point(image_points, camera_poses):
@@ -751,7 +751,7 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
     return np.array(errors), np.array(object_points), frames
 
 def locate_objects(object_points, errors):
-    dist = 0.145
+    dist = 0.15
 
     distance_matrix = np.zeros((object_points.shape[0], object_points.shape[0]))
     already_matched_points = []
@@ -805,7 +805,7 @@ def start_or_stop_locating_objects(data):
 def determine_scale(data):
     object_points = data["objectPoints"]
     camera_poses = data["cameraPoses"]
-    actual_distance = 0.1
+    actual_distance = 0.15
     observed_distances = []
 
     for object_points_i in object_points:

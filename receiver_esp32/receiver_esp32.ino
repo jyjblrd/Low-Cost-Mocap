@@ -9,6 +9,7 @@
 #define batVoltagePin 34
 #define MAX_VEL 100
 #define ROTOR_RADIUS 0.0225
+#define Z_GAIN 0.7
 
 unsigned long lastPing;
 
@@ -28,9 +29,9 @@ double groundEffectCoef = 28, groundEffectOffset = -0.035;
 // outer: position pid loop
 // inner: velocity pid loop
 // velocity pid loop sends accel setpoint to flight controller
-double xPosSetpoint = 0, xPos;
-double yPosSetpoint = 0, yPos;
-double zPosSetpoint = 0, zPos;
+double xPosSetpoint = 0, xPos = 0;
+double yPosSetpoint = 0, yPos = 0;
+double zPosSetpoint = 0, zPos = 0;
 double yawPosSetpoint = 0, yawPos, yawPosOutput;
 
 double xyPosKp = 1, xyPosKi = 0, xyPosKd = 0;
@@ -57,7 +58,7 @@ PID zVelPID(&zVel, &zVelOutput, &zVelSetpoint, zVelKp, zVelKi, zVelKd, DIRECT);
 unsigned long lastLoopTime = micros();
 unsigned long lastSbusSend = micros();
 float loopFrequency = 2000.0;
-float sbusFrequency = 100.0;
+float sbusFrequency = 50.0;
 
 uint8_t newMACAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A };
 
@@ -211,9 +212,10 @@ void loop() {
   zVelPID.Compute();
   int xPWM = 992 + (xVelOutput * 811) + xTrim;
   int yPWM = 992 + (yVelOutput * 811) + yTrim;
-  int zPWM = 992 + (zVelOutput * 811) + zTrim;
+  int zPWM = 992 + (Z_GAIN * zVelOutput * 811) + zTrim;
   int yawPWM = 992 + (yawPosOutput * 811) + yawTrim;
-  zPWM *= 1 - groundEffectCoef*pow(((2*ROTOR_RADIUS) / (4*(zPos-groundEffectOffset))), 2); // ground effect compensation
+  double groundEffectMultiplier = 1 - groundEffectCoef*pow(((2*ROTOR_RADIUS) / (4*(zPos-groundEffectOffset))), 2);
+  zPWM *= max(0., groundEffectMultiplier);
   zPWM = armed && millis() - timeArmed > 100 ? zPWM : 172;
   data.ch[0] = -yPWM;
   data.ch[1] = xPWM;
