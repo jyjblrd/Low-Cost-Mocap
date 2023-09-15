@@ -2,8 +2,10 @@
 #include <esp_wifi.h>
 #include <WiFi.h>
 
-// REPLACE WITH YOUR RECEIVER MAC Address
-uint8_t broadcastAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A };
+uint8_t broadcastAddresses[][6] = {
+  { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A },
+  { 0xC0, 0x4E, 0x30, 0x4B, 0x80, 0x3B },
+};
 
 esp_now_peer_info_t peerInfo;
 
@@ -46,10 +48,18 @@ void setup() {
   esp_now_register_send_cb(OnDataSent);
 
   // Register peer
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  memcpy(peerInfo.peer_addr, broadcastAddresses[0], 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
-
+  // Add peer
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    return;
+  }
+  
+  memcpy(peerInfo.peer_addr, broadcastAddresses[1], 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
   // Add peer
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("Failed to add peer");
@@ -61,11 +71,12 @@ char buffer[1024];
 void loop() {
   int availableBytes = Serial.available();
   if (availableBytes) {
-    Serial.readBytes(buffer, availableBytes);
-    buffer[availableBytes] = '\0';
+    int droneIndex = Serial.read() - '0';
+    Serial.readBytes(buffer, availableBytes-1);
+    buffer[availableBytes-1] = '\0';
     Serial.println(buffer);
 
-    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&buffer, strlen(buffer) + 1);
+    esp_err_t result = esp_now_send(broadcastAddresses[droneIndex], (uint8_t *)&buffer, strlen(buffer) + 1);
     if (result) {
       Serial.println(esp_err_to_name(result));
     }

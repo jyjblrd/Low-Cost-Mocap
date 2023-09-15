@@ -30,6 +30,8 @@ socketio = SocketIO(app, cors_allowed_origins='*')
 
 cameras_init = False
 
+num_objects = 2
+
 class LowPassFilter:
 
     def __init__(self, cutoff_frequency, sampling_frequency, dims, order=5, buffer_size=300):
@@ -64,77 +66,95 @@ class KalmanFilter:
         state_dim = 9
         measurement_dim = 6
         dt = 0.1
-
-        self.kalman = cv.KalmanFilter(state_dim, measurement_dim)
-        self.kalman.transitionMatrix = np.array([[1, 0, 0, dt, 0, 0, 0.5*dt**2, 0, 0],
-                                                 [0, 1, 0, 0, dt, 0, 0, 0.5*dt**2, 0],
-                                                 [0, 0, 1, 0, 0, dt, 0, 0, 0.5*dt**2],
-                                                 [0, 0, 0, 1, 0, 0, dt, 0, 0],
-                                                 [0, 0, 0, 0, 1, 0, 0, dt, 0],
-                                                 [0, 0, 0, 0, 0, 1, 0, 0, dt],
-                                                 [0, 0, 0, 0, 0, 0, 1, 0, 0],
-                                                 [0, 0, 0, 0, 0, 0, 0, 1, 0],
-                                                 [0, 0, 0, 0, 0, 0, 0, 0, 1]], dtype=np.float32)
-
-        self.kalman.processNoiseCov = np.eye(state_dim, dtype=np.float32) * 1e-2
-        self.kalman.measurementNoiseCov = np.eye(measurement_dim, dtype=np.float32) * 1e0
-        self.kalman.measurementMatrix = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],
-                                                  [0, 1, 0, 0, 0, 0, 0, 0, 0],
-                                                  [0, 0, 1, 0, 0, 0, 0, 0, 0],
-                                                  [0, 0, 0, 1, 0, 0, 0, 0, 0],
-                                                  [0, 0, 0, 0, 1, 0, 0, 0, 0],
-                                                  [0, 0, 0, 0, 0, 1, 0, 0, 0]], dtype=np.float32)
-        
-        self.kalman.statePost = np.zeros((9,1), dtype=np.float32)
-        
+        self.kalmans = []
         self.prev_measurement_time = 0
-        self.prev_pos = np.array([0,0,0])
+        self.prev_positions = []
+
+        for i in range(num_objects):
+            self.prev_positions.append(0)
+            self.kalmans.append(cv.KalmanFilter(state_dim, measurement_dim))
+            self.kalmans[i].transitionMatrix = np.array([[1, 0, 0, dt, 0, 0, 0.5*dt**2, 0, 0],
+                                                    [0, 1, 0, 0, dt, 0, 0, 0.5*dt**2, 0],
+                                                    [0, 0, 1, 0, 0, dt, 0, 0, 0.5*dt**2],
+                                                    [0, 0, 0, 1, 0, 0, dt, 0, 0],
+                                                    [0, 0, 0, 0, 1, 0, 0, dt, 0],
+                                                    [0, 0, 0, 0, 0, 1, 0, 0, dt],
+                                                    [0, 0, 0, 0, 0, 0, 1, 0, 0],
+                                                    [0, 0, 0, 0, 0, 0, 0, 1, 0],
+                                                    [0, 0, 0, 0, 0, 0, 0, 0, 1]], dtype=np.float32)
+
+            self.kalmans[i].processNoiseCov = np.eye(state_dim, dtype=np.float32) * 1e-2
+            self.kalmans[i].measurementNoiseCov = np.eye(measurement_dim, dtype=np.float32) * 1e0
+            self.kalmans[i].measurementMatrix = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],
+                                                    [0, 1, 0, 0, 0, 0, 0, 0, 0],
+                                                    [0, 0, 1, 0, 0, 0, 0, 0, 0],
+                                                    [0, 0, 0, 1, 0, 0, 0, 0, 0],
+                                                    [0, 0, 0, 0, 1, 0, 0, 0, 0],
+                                                    [0, 0, 0, 0, 0, 1, 0, 0, 0]], dtype=np.float32)
+            
+            self.kalmans[i].statePost = np.zeros((9,1), dtype=np.float32)
+    
 
     def predict_location(self, possible_new_objects):
-        if len(possible_new_objects) == 0:
-            return {
-                "pos": np.array([]),
-                "vel": np.array([]),
-                "heading": 0
-            }
-        
-        possible_new_positions = [x["pos"] for x in possible_new_objects]
+        res = []
 
-        dt = time.time() - self.prev_measurement_time
-        self.prev_measurement_time = time.time()
+        for i, kalman in enumerate(self.kalmans):
+            possible_new_positions = [x["pos"] for x in possible_new_objects]
+            if len(possible_new_positions) == 0:
+                break
 
-        self.kalman.transitionMatrix[:3, 3:6] = dt * np.eye(3)
-        self.kalman.transitionMatrix[3:6, 6:9] = dt * np.eye(3)
-        self.kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
+            dt = time.time() - self.prev_measurement_time
+            self.prev_measurement_time = time.time()
 
-        predicted_location = self.kalman.predict()[:3].T[0]
-        distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
-        closest_match_i = np.argmin(distances_to_predicted_location)
-        new_pos = possible_new_positions[closest_match_i].astype(np.float32)
-        new_vel = ((new_pos - self.prev_pos) / dt).astype(np.float32)
-        self.prev_pos = new_pos
+            kalman.transitionMatrix[:3, 3:6] = dt * np.eye(3)
+            kalman.transitionMatrix[3:6, 6:9] = dt * np.eye(3)
+            kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
-        self.kalman.correct(np.concatenate((new_pos, new_vel)))
-        predicted_state = self.kalman.statePre[:6].T[0]  # Predicted 3D location
+            predicted_location = kalman.predict()[:3].T[0]
+            distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
+            if all(kalman.statePost == 0): # if not initialized
+                A = kalman.statePost
+                A[0:3] = possible_new_positions[0].reshape((3, 1))
+                kalman.statePost = A
+                kalman.statePre = A
+            else:
+                print(distances_to_predicted_location)
+                distances_to_predicted_location = distances_to_predicted_location[distances_to_predicted_location < 0.5]
+            if len(distances_to_predicted_location) == 0:
+                continue
 
-        heading = possible_new_objects[closest_match_i]["heading"]
-        heading = heading_low_pass_filter.filter(heading)[0]
-        # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
+            closest_match_i = np.argmin(distances_to_predicted_location)
+            new_pos = possible_new_positions[closest_match_i].astype(np.float32)
+            new_vel = ((new_pos - self.prev_positions[i]) / dt).astype(np.float32)
+            self.prev_positions[i] = new_pos
 
-        vel = predicted_state[3:6].copy()
-        vel[0:2] = low_pass_filter_xy.filter(vel[0:2])
-        vel[2] = low_pass_filter_z.filter(vel[2])[0]
-        
-        return {
-            "pos": predicted_state[:3],
-            "vel": vel,
-            "heading": heading
-        }
+            kalman.correct(np.concatenate((new_pos, new_vel)))
+            predicted_state = kalman.statePre[:6].T[0]  # Predicted 3D location
+
+            heading = possible_new_objects[closest_match_i]["heading"]
+            heading = heading_low_pass_filter.filter(heading)[0]
+            # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
+
+            vel = predicted_state[3:6].copy()
+            vel[0:2] = low_pass_filter_xy.filter(vel[0:2])
+            vel[2] = low_pass_filter_z.filter(vel[2])[0]
+
+            del possible_new_objects[closest_match_i]
+            
+            res.append({
+                "pos": predicted_state[:3],
+                "vel": vel,
+                "heading": heading
+            })
+
+        return res
     
     def reset(self):
-        self.kalman.statePost = np.zeros((9,1), dtype=np.float32)
         self.prev_measurement_time = time.time()-20
-        self.prev_pos = np.array([0,0,0])
+
+        for i, kalman in enumerate(self.kalmans):
+            kalman.statePost = np.zeros((9,1), dtype=np.float32)
+            self.prev_positions[i] = np.array([0,0,0])
     
 kalman_filter = KalmanFilter()
 
@@ -213,27 +233,29 @@ class Cameras:
                     }
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
-                        filtered_object = kalman_filter.predict_location(objects)
+                        filtered_objects = kalman_filter.predict_location(objects)
+                        
+                        if len(filtered_objects) != 0:
+                            for i, filtered_object in enumerate(filtered_objects):
+                                if self.drone_armed[i]:
+                                    filtered_object["heading"] = round(filtered_object["heading"], 4)
 
-                        if len(filtered_object["pos"]) != 0:
-                            if self.drone_armed:
-                                filtered_object["heading"] = round(filtered_object["heading"], 4)
-
-                                serial_data = { 
-                                    "pos": [round(x, 4) for x in filtered_object["pos"].tolist()] + [filtered_object["heading"]],
-                                    "vel": [round(x, 4) for x in filtered_object["vel"].tolist()]
-                                }
-                                with serialLock:
-                                    ser.write(json.dumps(serial_data).encode('utf-8'))
+                                    serial_data = { 
+                                        "pos": [round(x, 4) for x in filtered_object["pos"].tolist()] + [filtered_object["heading"]],
+                                        "vel": [round(x, 4) for x in filtered_object["vel"].tolist()]
+                                    }
+                                    with serialLock:
+                                        ser.write(f"{i}{json.dumps(serial_data)}".encode('utf-8'))
                             
-                        filtered_object["vel"] = filtered_object["vel"].tolist()
-                        filtered_object["pos"] = filtered_object["pos"].tolist()
+                        for filtered_object in filtered_objects:
+                            filtered_object["vel"] = filtered_object["vel"].tolist()
+                            filtered_object["pos"] = filtered_object["pos"].tolist()
                     
                     socketio.emit("object-points", {
                         "object_points": object_points.tolist(), 
                         "errors": errors.tolist(), 
                         "objects": [{k:v.tolist() for (k,v) in object.items()} for object in objects], 
-                        "filtered_object": [filtered_object]
+                        "filtered_objects": filtered_objects
                     })
         
         return frames
@@ -323,7 +345,7 @@ def camera_stream():
             i = (i+1)%10
             if i == 0:
                 socketio.emit("fps", {"fps": round(1/(time_now - last_run_time))})
-                
+
             if time_now - last_run_time < loop_interval:
                 time.sleep(last_run_time - time_now + loop_interval)
             last_run_time = time.time()
@@ -341,11 +363,11 @@ def trajectory_planning_api():
 
     waypoint_groups = [] # grouped by continuious movement (no stopping)
     for waypoint in data["waypoints"]:
-        stop_at_waypoint = waypoint[3]
+        stop_at_waypoint = waypoint[-1]
         if stop_at_waypoint:
-            waypoint_groups.append([waypoint[:3]])
+            waypoint_groups.append([waypoint[:3*num_objects]])
         else:
-            waypoint_groups[-1].append(waypoint[:3])
+            waypoint_groups[-1].append(waypoint[:3*num_objects])
     
     setpoints = []
     for i in range(0, len(waypoint_groups)-1):
@@ -360,23 +382,23 @@ def trajectory_planning_api():
 
 def plan_trajectory(start_pos, end_pos, waypoints, max_vel, max_accel, max_jerk, timestep):
 
-    otg = Ruckig(3, timestep, len(waypoints))  # DoFs, timestep, number of waypoints
-    inp = InputParameter(3)
-    out = OutputParameter(3, len(waypoints))
+    otg = Ruckig(3*num_objects, timestep, len(waypoints))  # DoFs, timestep, number of waypoints
+    inp = InputParameter(3*num_objects)
+    out = OutputParameter(3*num_objects, len(waypoints))
 
     inp.current_position = start_pos
-    inp.current_velocity = [0,0,0]
-    inp.current_acceleration = [0,0,0]
+    inp.current_velocity = [0,0,0]*num_objects
+    inp.current_acceleration = [0,0,0]*num_objects
 
     inp.target_position = end_pos
-    inp.target_velocity = [0,0,0]
-    inp.target_acceleration = [0,0,0]
+    inp.target_velocity = [0,0,0]*num_objects
+    inp.target_acceleration = [0,0,0]*num_objects
 
     inp.intermediate_positions = waypoints
 
-    inp.max_velocity = max_vel
-    inp.max_acceleration = max_accel
-    inp.max_jerk = max_jerk
+    inp.max_velocity = max_vel*num_objects
+    inp.max_acceleration = max_accel*num_objects
+    inp.max_jerk = max_jerk*num_objects
 
     setpoints = []
     res = Result.Working
@@ -394,11 +416,14 @@ def arm_drone(data):
         return
     
     Cameras.instance().drone_armed = data["droneArmed"]
-    serial_data = {
-        "armed": data["droneArmed"],
-    }
-    with serialLock:
-        ser.write(json.dumps(serial_data).encode('utf-8'))
+    for droneIndex in range(0, num_objects):
+        serial_data = {
+            "armed": data["droneArmed"][droneIndex],
+        }
+        with serialLock:
+            ser.write(f"{str(droneIndex)}{json.dumps(serial_data)}".encode('utf-8'))
+        
+        time.sleep(0.01)
 
 @socketio.on("set-drone-pid")
 def arm_drone(data):
@@ -414,7 +439,7 @@ def arm_drone(data):
         "setpoint": [float(x) for x in data["droneSetpoint"]],
     }
     with serialLock:
-        ser.write(json.dumps(serial_data).encode('utf-8'))
+        ser.write(f"{str(data['droneIndex'])}{json.dumps(serial_data)}".encode('utf-8'))
 
 @socketio.on("set-drone-trim")
 def arm_drone(data):

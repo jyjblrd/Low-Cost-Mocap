@@ -176,8 +176,8 @@ let xPosPID = new Controller();
 let yPosPID = new Controller();
 let zPosPID = new Controller();
 
-export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, objectPointCount, dronePID, droneArmed}: 
-  {filteredObjectsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, objectPointCount: number, dronePID: number[], droneArmed: boolean}) {
+export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, objectPointCount, dronePID, droneArmed, currentDroneIndex}: 
+  {filteredObjectsRef: MutableRefObject<object>, droneSetpointHistoryRef: MutableRefObject<number[][]>, objectPointCount: number, dronePID: number[], droneArmed: boolean[], currentDroneIndex: number}) {
   let chartRef = useRef<ChartJS<"line", number[], number> | null>(null);
 
   useEffect(() => {
@@ -188,7 +188,7 @@ export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, obje
     }
     else if (length !== data.labels![data.labels!.length - 1]) {
       data.labels.push(length)
-      const lastFilteredPoint = sliced[length-1]
+      const lastFilteredPoint = sliced[length-1][currentDroneIndex]
   
       data.datasets[0].data.push(lastFilteredPoint["pos"][0])
       data.datasets[1].data.push(lastFilteredPoint["pos"][1])
@@ -253,7 +253,7 @@ export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, obje
       yPosPID.reset()
       zPosPID.reset()
     }
-  }, [droneArmed])
+  }, [droneArmed, currentDroneIndex])
 
   return <Line ref={chartRef} options={options} data={data} height={"50px"}/>;
 }

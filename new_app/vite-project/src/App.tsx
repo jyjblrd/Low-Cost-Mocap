@@ -18,6 +18,7 @@ import TrajectoryPlanningSetpoints from './components/trajectoryPlanningSetpoint
 
 const TRAJECTORY_PLANNING_TIMESTEP = 0.05
 const LAND_Z_HEIGHT = 0.075
+const NUM_DRONES = 2
 
 export default function App() {
   const [cameraStreamRunning, setCameraStreamRunning] = useState(false);
@@ -32,7 +33,7 @@ export default function App() {
   const [isLocatingObjects, setIsLocatingObjects] = useState(false);
 
   const objectPoints = useRef<Array<Array<Array<number>>>>([])
-  const filteredObjects = useRef<number[][]>([])
+  const filteredObjects = useRef<object[][]>([])
   const droneSetpointHistory = useRef<number[][]>([])
   const objectPointErrors = useRef<Array<Array<number>>>([])
   const objects = useRef<Array<Array<Object>>>([])
@@ -43,9 +44,10 @@ export default function App() {
   const [cameraPoses, setCameraPoses] = useState<Array<object>>([{"R":[[1,0,0],[0,1,0],[0,0,1]],"t":[0,0,0]},{"R":[[-0.40025743279361087,-0.764167577893398,0.5058081656023417],[0.6057113104122508,0.193583787410693,0.7717766034873081],[-0.6876829181622459,0.6152830488062135,0.3853815952008976]],"t":[-0.911264477156501,-1.2494611379136231,0.9261006120928673]},{"R":[[-0.9992013082988144,0.006039386191253552,-0.03950026972529238],[-0.03990752593504311,-0.2011252200277974,0.978752284923266],[-0.0020334374054333387,0.9795469216342846,0.20120559994472123]],"t":[0.17989927265511652,-1.603679544719886,1.4935567372598195]},{"R":[[-0.3218185752502281,0.6912547796960232,-0.6469927620702687],[-0.710026175478082,0.2758520373575218,0.6478954264552823],[0.6263350818530613,0.6678865794677316,0.4020346778662412]],"t":[1.5927309737030293,-1.0506285046035349,1.541474020461472]}])
   const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9694244304134025,0.21801637285889408,-0.11262830409405102,0.21461124960580238],[-0.21801637285889408,0.5545463086117931,-0.8030860805483342,1.4394227117761877],[0.11262830409405104,-0.8030860805483344,-0.5851218781983906,0.9942013582459374],[0,0,0,1]])
 
-  const [droneArmed, setDroneArmed] = useState(false)
+  const [currentDroneIndex, setCurrentDroneIndex] = useState(0)
+  const [droneArmed, setDroneArmed] = useState(Array.apply(null, Array(NUM_DRONES)).map(() => (false)))
   const [dronePID, setDronePID] = useState(["1.5","0","0.3","1.5","0","0.2","0.3","0.1","0.05","0.2","0.03","0.1","0.3","0.1","0.05","28","-0.035"])
-  const [droneSetpoint, setDroneSetpoint] = useState(["0","0","0"])
+  const [droneSetpoint, setDroneSetpoint] = useState(Array.apply(null, Array(NUM_DRONES)).map(() => (["0","0","0"])))
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
 
@@ -54,7 +56,8 @@ export default function App() {
   const [trajectoryPlanningMaxVel, setTrajectoryPlanningMaxVel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxAccel, setTrajectoryPlanningMaxAccel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxJerk, setTrajectoryPlanningMaxJerk] = useState(["0.5", "0.5", "0.5"])
-  const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[[0.2,0.2,0.5,true],\n[-0.2,0.2,0.5,true],\n[-0.2,0.2,0.8,true],\n[-0.2,-0.2,0.8,true],\n[-0.2,-0.2,0.5,true],\n[0.2,-0.2,0.5,true],\n[0.2,-0.2,0.8,true],\n[0.2,0.2,0.8,true],\n[0.2,0.2,0.5,true]\n]")
+  // const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[0.2,0.2,0.5,true],\n[-0.2,0.2,0.5,true],\n[-0.2,0.2,0.8,true],\n[-0.2,-0.2,0.8,true],\n[-0.2,-0.2,0.5,true],\n[0.2,-0.2,0.5,true],\n[0.2,-0.2,0.8,true],\n[0.2,0.2,0.8,true],\n[0.2,0.2,0.5,true]\n]")
+  const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[\n[0.2,0.2,0.6,0,0,0.8,true],\n[-0.2,0.2,0.6,0.2,0.2,0.6,true],\n[-0.2,-0.2,0.5,0,0,0.4,true],\n[0.2,-0.2,0.5,-0.2,-0.2,0.6,true],\n[0.2,0.2,0.5,0,0,0.8,true]\n]")
   const [trajectoryPlanningSetpoints, setTrajectoryPlanningSetpoints] = useState<number[][]>([])
   const [trajectoryPlanningRunStartTimestamp, setTrajectoryPlanningRunStartTimestamp] = useState(0)
 
@@ -85,10 +88,10 @@ export default function App() {
 
   useEffect(() => {
     let count = 0
-    socket.emit("arm-drone", { droneArmed, count })
+    socket.emit("arm-drone", { droneArmed, count, currentDroneIndex })
     const pingInterval = setInterval(() => {
       count += 1
-      socket.emit("arm-drone", { droneArmed, count })
+      socket.emit("arm-drone", { droneArmed, count, currentDroneIndex })
     }, 500)
 
     return () => {
@@ -107,85 +110,91 @@ export default function App() {
   useEffect(() => {
     let timestamp = Date.now()/1000
 
-    if (motionPreset !== "setpoint") {
-      const motionInterval = setInterval(() => {
-        timestamp = Date.now()/1000
-        let tempDroneSetpoint = [] as number[]
+    for (let droneIndex = 0; droneIndex < NUM_DRONES; droneIndex++) {
+      if (motionPreset !== "setpoint") {
+        const motionInterval = setInterval(() => {
+          timestamp = Date.now()/1000
+          let tempDroneSetpoint = [] as number[]
 
-        switch (motionPreset) {
-          case "none": {
-            break;
-          }
-
-          case "circle": {
-            const radius = 0.3
-            const period = 10
-            tempDroneSetpoint = [
-              parseFloat(droneSetpoint[0]) + radius*Math.cos(timestamp*2*Math.PI / period), 
-              parseFloat(droneSetpoint[1]) + radius*Math.sin(timestamp*2*Math.PI / period), 
-              parseFloat(droneSetpoint[2])
-            ]
-            tempDroneSetpoint.map(x => x.toFixed(3))
-            socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
-            break;
-          }
-        
-          case "square": {
-            const size = 0.2
-            const period = 20
-            let offset = [0,0]
-            switch (Math.floor((timestamp*4)/period) % 4) {
-              case 0:
-                offset = [1,1]
-                break
-              case 1:
-                offset = [1,-1]
-                break
-              case 2:
-                offset = [-1,-1]
-                break
-              case 3:
-                offset = [-1,1]
-                break
+          switch (motionPreset) {
+            case "none": {
+              break;
             }
 
-            tempDroneSetpoint = [
-              parseFloat(droneSetpoint[0]) + (offset[0] * size), 
-              parseFloat(droneSetpoint[1]) + (offset[1] * size), 
-              parseFloat(droneSetpoint[2])
-            ]
-            tempDroneSetpoint.map(x => x.toFixed(3))
-            socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
-            break;
-          }
-
-          case "plannedTrajectory": {
-            const index = Math.floor((timestamp - trajectoryPlanningRunStartTimestamp) / TRAJECTORY_PLANNING_TIMESTEP)
-            if (index < trajectoryPlanningSetpoints.length) {
-              tempDroneSetpoint = trajectoryPlanningSetpoints[index]
+            case "circle": {
+              const radius = 0.3
+              const period = 10
+              tempDroneSetpoint = [
+                parseFloat(droneSetpoint[droneIndex][0]) + radius*Math.cos(timestamp*2*Math.PI / period), 
+                parseFloat(droneSetpoint[droneIndex][1]) + radius*Math.sin(timestamp*2*Math.PI / period), 
+                parseFloat(droneSetpoint[droneIndex][2])
+              ]
               tempDroneSetpoint.map(x => x.toFixed(3))
-              socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint })
+              socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint, droneIndex })
+              break;
             }
-            else {
-              setMotionPreset("setpoint")
+          
+            case "square": {
+              const size = 0.2
+              const period = 20
+              let offset = [0,0]
+              switch (Math.floor((timestamp*4)/period) % 4) {
+                case 0:
+                  offset = [1,1]
+                  break
+                case 1:
+                  offset = [1,-1]
+                  break
+                case 2:
+                  offset = [-1,-1]
+                  break
+                case 3:
+                  offset = [-1,1]
+                  break
+              }
+
+              tempDroneSetpoint = [
+                parseFloat(droneSetpoint[droneIndex][0]) + (offset[0] * size), 
+                parseFloat(droneSetpoint[droneIndex][1]) + (offset[1] * size), 
+                parseFloat(droneSetpoint[droneIndex][2])
+              ]
+              tempDroneSetpoint.map(x => x.toFixed(3))
+              socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint, droneIndex })
+              break;
             }
-            break;
+
+            case "plannedTrajectory": {
+              const index = Math.floor((timestamp - trajectoryPlanningRunStartTimestamp) / TRAJECTORY_PLANNING_TIMESTEP)
+              if (index < trajectoryPlanningSetpoints.length) {
+                tempDroneSetpoint = trajectoryPlanningSetpoints[droneIndex][index]
+                tempDroneSetpoint.map(x => x.toFixed(3))
+                socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint, droneIndex })
+              }
+              else {
+                setMotionPreset("setpoint")
+              }
+              break;
+            }
+
+            default:
+              break;
           }
+          
+          if (droneIndex === currentDroneIndex) {
+            setDroneSetpointWithMotion(tempDroneSetpoint)
+          }
+        }, TRAJECTORY_PLANNING_TIMESTEP*1000)
 
-          default:
-            break;
+        return () => {
+          clearInterval(motionInterval)
         }
-
-        setDroneSetpointWithMotion(tempDroneSetpoint)
-      }, TRAJECTORY_PLANNING_TIMESTEP*1000)
-
-      return () => {
-        clearInterval(motionInterval)
       }
-    }
-    else {
-      setDroneSetpointWithMotion(droneSetpoint.map(x => parseFloat(x)))
-      socket.emit("set-drone-setpoint", { droneSetpoint })
+      else {
+        if (droneIndex === currentDroneIndex) {
+          setDroneSetpointWithMotion(droneSetpoint[droneIndex].map(x => parseFloat(x)))
+        }
+        socket.emit("set-drone-setpoint", { "droneSetpoint": droneSetpoint[droneIndex], droneIndex })
+      }
     }
   }, [motionPreset, droneSetpoint, trajectoryPlanningRunStartTimestamp])
 
@@ -203,8 +212,8 @@ export default function App() {
   useEffect(() => {
     socket.on("object-points", (data) => {
       objectPoints.current.push(data["object_points"])
-      if (data["filtered_object"][0].length != 0) {
-        filteredObjects.current.push(data["filtered_object"][0])
+      if (data["filtered_objects"].length != 0) {
+        filteredObjects.current.push(data["filtered_objects"])
       }
       objectPointErrors.current.push(data["errors"])
       objects.current.push(data["objects"])
@@ -262,10 +271,10 @@ export default function App() {
 
   const wait = async (ms: number) => new Promise(r=>setTimeout(r,ms))
 
-  const moveToPos = async (pos: number[], land: boolean = false, landThreshold: number = 0) => {
-    console.log(filteredObjects.current[filteredObjects.current.length-1])
+  const moveToPos = async (pos: number[], droneIndex: number) => {
+    console.log(filteredObjects.current[filteredObjects.current.length-1][droneIndex])
     const waypoints = [
-      filteredObjects.current[filteredObjects.current.length-1]["pos"].concat([true]),
+      filteredObjects.current[filteredObjects.current.length-1][droneIndex]["pos"].concat([true]),
       pos.concat([true])
     ]
     const setpoints = await planTrajectory(
@@ -278,7 +287,7 @@ export default function App() {
     
     for await (const [i, setpoint] of setpoints.entries()) {
       setpoint.map(x => x.toFixed(3))
-      socket.emit("set-drone-setpoint", { "droneSetpoint": setpoint })
+      socket.emit("set-drone-setpoint", { "droneSetpoint": setpoint, droneIndex })
       setDroneSetpointWithMotion(setpoint)
 
       // if (land && i > 0.75*setpoints.length && filteredObjects.current[filteredObjects.current.length-1]["vel"][2] >= -0.2) {
@@ -646,7 +655,7 @@ export default function App() {
             </Row>
             <Row className='pt-3'>
               <Col>
-                Waypoints <code>[x, y, z, stop at waypoint]</code>
+                Waypoints <code>[drone index, x, y, z, stop at waypoint]</code>
               </Col>
             </Row>
             <Row className='pt-1'>
@@ -668,7 +677,9 @@ export default function App() {
                   onClick={async () => {
                     setMotionPreset("none")
                     const initPos = JSON.parse(trajectoryPlanningWaypoints)[0].slice(0,3)
-                    await moveToPos(initPos)
+                    await Promise.all(Array.from(Array(NUM_DRONES).keys()).map(async (droneIndex) => {
+                      await moveToPos(initPos, droneIndex)
+                    }))
                     setTrajectoryPlanningRunStartTimestamp(Date.now()/1000)
                     setMotionPreset("plannedTrajectory")
                   }}
@@ -705,51 +716,73 @@ export default function App() {
               <Col>
                 <Button
                   size='sm' 
-                  variant={droneArmed ? "outline-danger" : "outline-primary"}
+                  variant={droneArmed[currentDroneIndex] ? "outline-danger" : "outline-primary"}
                   disabled={!isTriangulatingPoints}
                   onClick={() => {
-                    setDroneArmed(!droneArmed);
+                    let newDroneArmed = droneArmed.slice()
+                    newDroneArmed[currentDroneIndex] = !newDroneArmed[currentDroneIndex]
+                    setDroneArmed(newDroneArmed);
                   }
                 }>
-                  {droneArmed ? "Disarm" : "Arm"}
+                  {droneArmed[currentDroneIndex] ? "Disarm" : "Arm"}
                 </Button>
               </Col>
+              <Col>
+                <Form.Select value={currentDroneIndex} onChange={(e) => setCurrentDroneIndex(parseInt(e.target.value))} size='sm'>
+                  <option value="0">Drone 0</option>
+                  <option value="1">Drone 1</option>
+                </Form.Select>
+              </Col>
             </Row>
+            <Row className='pt-3'>
+              <Col xs={{offset:3}} className='text-center'>
+                X
+              </Col>
+              <Col className='text-center'>
+                Y
+              </Col>
+              <Col className='text-center'>
+                Z
+              </Col>
+            </Row>
+            { Array.from(Array(NUM_DRONES).keys()).map((droneIndex) => (
+              <Row className='pt-2'>
+                <Col xs={3} className='pt-2'>
+                  Setpoint {droneIndex}
+                </Col>
+                <Col>
+                  <Form.Control 
+                    value={droneSetpoint[droneIndex][0]}
+                    onChange={(event) => {
+                      let newDroneSetpoint = droneSetpoint.slice()
+                      newDroneSetpoint[droneIndex][0] = event.target.value
+                      setDroneSetpoint(newDroneSetpoint)
+                    }}
+                  />
+                </Col>
+                <Col>
+                  <Form.Control 
+                    value={droneSetpoint[droneIndex][1]}
+                    onChange={(event) => {
+                      let newDroneSetpoint = droneSetpoint.slice()
+                      newDroneSetpoint[droneIndex][1] = event.target.value
+                      setDroneSetpoint(newDroneSetpoint)
+                    }}
+                  />
+                </Col>
+                <Col>
+                  <Form.Control 
+                    value={droneSetpoint[droneIndex][2]}
+                    onChange={(event) => {
+                      let newDroneSetpoint = droneSetpoint.slice()
+                      newDroneSetpoint[droneIndex][2] = event.target.value
+                      setDroneSetpoint(newDroneSetpoint)
+                    }}
+                  />
+                </Col>
+              </Row>
+            ))}
             <Row className='pt-2'>
-              <Col xs={2} className='pt-2'>
-                Setpoint
-              </Col>
-              <Col>
-                <Form.Control 
-                  value={droneSetpoint[0]}
-                  onChange={(event) => {
-                    let newDroneSetpoint = droneSetpoint.slice()
-                    newDroneSetpoint[0] = event.target.value
-                    setDroneSetpoint(newDroneSetpoint)
-                  }}
-                />
-              </Col>
-              <Col>
-                <Form.Control 
-                  value={droneSetpoint[1]}
-                  onChange={(event) => {
-                    let newDroneSetpoint = droneSetpoint.slice()
-                    newDroneSetpoint[1] = event.target.value
-                    setDroneSetpoint(newDroneSetpoint)
-                  }}
-                />
-              </Col>
-              <Col>
-                <Form.Control 
-                  value={droneSetpoint[2]}
-                  onChange={(event) => {
-                    let newDroneSetpoint = droneSetpoint.slice()
-                    newDroneSetpoint[2] = event.target.value
-                    setDroneSetpoint(newDroneSetpoint)
-                  }}
-                />
-              </Col>
-            </Row><Row className='pt-2'>
               <Col>
                 <Button
                   size='sm' 
@@ -784,8 +817,10 @@ export default function App() {
                 <Button
                   size='sm' 
                   onClick={async () => {
-                    await moveToPos([0,0,LAND_Z_HEIGHT], true, LAND_Z_HEIGHT+0.1)
-                    setDroneArmed(false)
+                    await Promise.all(Array.from(Array(NUM_DRONES).keys()).map(async (droneIndex) => {
+                      await moveToPos([0,0,LAND_Z_HEIGHT], droneIndex)
+                    }))
+                    setDroneArmed(Array.apply(null, Array(NUM_DRONES)).map(() => (false)))
                     setMotionPreset("setpoint")
                   }
                 }>
@@ -1076,7 +1111,7 @@ export default function App() {
       <Row className='pt-3'>
         <Col>
           <Card className='shadow-sm p-3'>
-            <Chart filteredObjectsRef={filteredObjects} droneSetpointHistoryRef={droneSetpointHistory} objectPointCount={objectPointCount} dronePID={dronePID.map(x => parseFloat(x))} droneArmed={droneArmed} />
+            <Chart filteredObjectsRef={filteredObjects} droneSetpointHistoryRef={droneSetpointHistory} objectPointCount={objectPointCount} dronePID={dronePID.map(x => parseFloat(x))} droneArmed={droneArmed} currentDroneIndex={currentDroneIndex} />
           </Card>
         </Col>
       </Row>
@@ -1097,7 +1132,7 @@ export default function App() {
                   ))}
                   {/* <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/> */}
                   <Objects filteredObjectsRef={filteredObjects} count={objectPointCount}/>
-                  <TrajectoryPlanningSetpoints trajectoryPlanningSetpoints={trajectoryPlanningSetpoints}/>
+                  <TrajectoryPlanningSetpoints trajectoryPlanningSetpoints={trajectoryPlanningSetpoints} NUM_DRONES={NUM_DRONES} />
                   <OrbitControls />
                   <axesHelper args={[0.2]}/>
                   <gridHelper args={[4, 4*10]}/>
