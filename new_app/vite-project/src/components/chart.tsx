@@ -181,6 +181,7 @@ export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, obje
   let chartRef = useRef<ChartJS<"line", number[], number> | null>(null);
 
   useEffect(() => {
+    console.log(filteredObjectsRef.current)
     let sliced = filteredObjectsRef.current.length <= 15 ? [] : filteredObjectsRef.current.slice(15)
     const length = sliced.length
     if (length === 0) {
@@ -188,44 +189,47 @@ export default function Chart({filteredObjectsRef, droneSetpointHistoryRef, obje
     }
     else if (length !== data.labels![data.labels!.length - 1]) {
       data.labels.push(length)
-      const lastFilteredPoint = sliced[length-1][currentDroneIndex]
+      const lastFilteredPoint = sliced[length-1].filter(x => x.droneIndex === currentDroneIndex)[0]
   
-      data.datasets[0].data.push(lastFilteredPoint["pos"][0])
-      data.datasets[1].data.push(lastFilteredPoint["pos"][1])
-      data.datasets[2].data.push(lastFilteredPoint["pos"][2])
-  
-      data.datasets[3].data.push(lastFilteredPoint["heading"])
-      
-      if (lastFilteredPoint["vel"]) {
-        data.datasets[4].data.push(lastFilteredPoint["vel"][0])
-        data.datasets[5].data.push(lastFilteredPoint["vel"][1])
-        data.datasets[6].data.push(lastFilteredPoint["vel"][2])
-      }
-      else {
-        data.datasets[4].data.push(undefined)
-        data.datasets[5].data.push(undefined)
-        data.datasets[6].data.push(undefined)
-      }
-      
-      data.datasets[7].data.push(droneSetpointHistoryRef.current[length-1][0])
-      data.datasets[8].data.push(droneSetpointHistoryRef.current[length-1][1])
-      data.datasets[9].data.push(droneSetpointHistoryRef.current[length-1][2])
-  
-      if (droneSetpointHistoryRef.current[length-1].length != 0) {
-        xPosPID.setTarget(droneSetpointHistoryRef.current[length-1][0])
-        yPosPID.setTarget(droneSetpointHistoryRef.current[length-1][1])
-        zPosPID.setTarget(droneSetpointHistoryRef.current[length-1][2])
-      }
-      
-      if (lastFilteredPoint["pos"].length != 0) {
-        data.datasets[10].data.push(xPosPID.update(lastFilteredPoint["pos"][0]))
-        data.datasets[11].data.push(yPosPID.update(lastFilteredPoint["pos"][1]))
-        data.datasets[12].data.push(zPosPID.update(lastFilteredPoint["pos"][2]))
-      }
-      else {
-        data.datasets[10].data.push(undefined)
-        data.datasets[11].data.push(undefined)
-        data.datasets[12].data.push(undefined)
+      if (lastFilteredPoint !== undefined) {
+        console.log(lastFilteredPoint)
+        data.datasets[0].data.push(lastFilteredPoint["pos"][0])
+        data.datasets[1].data.push(lastFilteredPoint["pos"][1])
+        data.datasets[2].data.push(lastFilteredPoint["pos"][2])
+    
+        data.datasets[3].data.push(lastFilteredPoint["heading"])
+        
+        if (lastFilteredPoint["vel"]) {
+          data.datasets[4].data.push(lastFilteredPoint["vel"][0])
+          data.datasets[5].data.push(lastFilteredPoint["vel"][1])
+          data.datasets[6].data.push(lastFilteredPoint["vel"][2])
+        }
+        else {
+          data.datasets[4].data.push(undefined)
+          data.datasets[5].data.push(undefined)
+          data.datasets[6].data.push(undefined)
+        }
+        
+        data.datasets[7].data.push(droneSetpointHistoryRef.current[length-1][0])
+        data.datasets[8].data.push(droneSetpointHistoryRef.current[length-1][1])
+        data.datasets[9].data.push(droneSetpointHistoryRef.current[length-1][2])
+    
+        if (droneSetpointHistoryRef.current[length-1].length != 0) {
+          xPosPID.setTarget(droneSetpointHistoryRef.current[length-1][0])
+          yPosPID.setTarget(droneSetpointHistoryRef.current[length-1][1])
+          zPosPID.setTarget(droneSetpointHistoryRef.current[length-1][2])
+        }
+        
+        if (lastFilteredPoint["pos"].length != 0) {
+          data.datasets[10].data.push(xPosPID.update(lastFilteredPoint["pos"][0]))
+          data.datasets[11].data.push(yPosPID.update(lastFilteredPoint["pos"][1]))
+          data.datasets[12].data.push(zPosPID.update(lastFilteredPoint["pos"][2]))
+        }
+        else {
+          data.datasets[10].data.push(undefined)
+          data.datasets[11].data.push(undefined)
+          data.datasets[12].data.push(undefined)
+        }
       }
     }
 

@@ -42,11 +42,11 @@ export default function App() {
   const [fps, setFps] = useState(0);
 
   const [cameraPoses, setCameraPoses] = useState<Array<object>>([{"R":[[1,0,0],[0,1,0],[0,0,1]],"t":[0,0,0]},{"R":[[-0.0008290000610233772,-0.7947131755287576,0.6069845808584402],[0.7624444396180684,0.3922492478955913,0.5146056781855716],[-0.6470531579819294,0.46321862674804054,0.6055994671226776]],"t":[-2.6049886186449047,-2.173986915510569,0.7303458563542193]},{"R":[[-0.9985541623963866,-0.028079891357569067,-0.045837806036037466],[-0.043210651917521686,-0.08793122558361385,0.9951888962042462],[-0.03197537054848707,0.995730696156702,0.0865907408997996]],"t":[0.8953888630067902,-3.4302652822708373,3.70967106300893]},{"R":[[-0.4499864100408215,0.6855400696798954,-0.5723172578577878],[-0.7145273934510732,0.10804105689305427,0.6912146801345055],[0.5356891214002657,0.7199735709654319,0.4412201517663212]],"t":[2.50141072072536,-2.313616767292231,1.8529907514099284]}])
-  const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9694244304134025,0.21801637285889408,-0.11262830409405102,0.21461124960580238],[-0.21801637285889408,0.5545463086117931,-0.8030860805483342,1.4394227117761877],[0.11262830409405104,-0.8030860805483344,-0.5851218781983906,0.9942013582459374],[0,0,0,1]])
+  const [toWorldCoordsMatrix, setToWorldCoordsMatrix] = useState<number[][]>([[0.9941338485260931,0.0986512964608827,-0.04433748889242502,0.9938296704767513],[-0.0986512964608827,0.659022672138982,-0.7456252673517598,2.593331619023365],[0.04433748889242498,-0.7456252673517594,-0.6648888236128887,2.9576262456228286],[0,0,0,1]])
 
   const [currentDroneIndex, setCurrentDroneIndex] = useState(0)
   const [droneArmed, setDroneArmed] = useState(Array.apply(null, Array(NUM_DRONES)).map(() => (false)))
-  const [dronePID, setDronePID] = useState(["1.5","0","0.3","1.5","0","0.2","0.3","0.1","0.05","0.2","0.03","0.1","0.3","0.1","0.05","28","-0.035"])
+  const [dronePID, setDronePID] = useState(["1","0","0","1.5","0","0","0.3","0.1","0.05","0.2","0.03","0.05","0.3","0.1","0.05","28","-0.035"])
   const [droneSetpoint, setDroneSetpoint] = useState(Array.apply(null, Array(NUM_DRONES)).map(() => (["0","0","0"])))
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
@@ -1130,7 +1130,7 @@ export default function App() {
                   {cameraPoses.map(({R, t}, i) => (
                       <CameraWireframe R={R} t={t} toWorldCoordsMatrix={toWorldCoordsMatrix} key={i}/>
                   ))}
-                  {/* <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/> */}
+                  <Points objectPointsRef={objectPoints} objectPointErrorsRef={objectPointErrors} count={objectPointCount}/>
                   <Objects filteredObjectsRef={filteredObjects} count={objectPointCount}/>
                   <TrajectoryPlanningSetpoints trajectoryPlanningSetpoints={trajectoryPlanningSetpoints} NUM_DRONES={NUM_DRONES} />
                   <OrbitControls />
