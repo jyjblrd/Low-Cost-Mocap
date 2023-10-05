@@ -52,14 +52,7 @@ class LowPassFilter:
             self.buffered_data = self.buffered_data[-self.buffer_size//2:]  # Keep the last half of the buffered data for the next filtering iteration
 
         return filtered_data[-1]
-    
-    def reset(self):
-        self.buffered_data = np.empty((0, self.dims))
 
-
-low_pass_filter_xy = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=2)
-low_pass_filter_z = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
-heading_low_pass_filter = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
 
 class KalmanFilter:
     def __init__(self):
@@ -69,6 +62,7 @@ class KalmanFilter:
         self.kalmans = []
         self.prev_measurement_time = 0
         self.prev_positions = []
+        self.heading_low_pass_filter = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
 
         for i in range(num_objects):
             self.prev_positions.append(0)
@@ -180,6 +174,7 @@ class Cameras:
         self.to_world_coords_matrix = None
 
         self.drone_armed = False
+        self.kalman_filter = KalmanFilter()
 
         global cameras_init
         cameras_init = True
@@ -233,7 +228,7 @@ class Cameras:
                     }
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
-                        filtered_objects = kalman_filter.predict_location(objects)
+                        filtered_objects = self.kalman_filter.predict_location(objects)
                         
                         if len(filtered_objects) != 0:
                             for i, filtered_object in enumerate(filtered_objects):
@@ -297,10 +292,7 @@ class Cameras:
         self.is_capturing_points = True
         self.is_triangulating_points = True
         self.camera_poses = camera_poses
-        low_pass_filter_xy.reset()
-        low_pass_filter_z.reset()
-        heading_low_pass_filter.reset()
-        kalman_filter.reset()
+        self.kalman_filter = KalmanFilter()
 
     def stop_trangulating_points(self):
         self.is_capturing_points = False
