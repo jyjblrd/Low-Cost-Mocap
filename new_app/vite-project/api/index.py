@@ -62,6 +62,9 @@ class KalmanFilter:
         self.kalmans = []
         self.prev_measurement_time = 0
         self.prev_positions = []
+
+        self.low_pass_filter_xy = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=2)
+        self.low_pass_filter_z = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
         self.heading_low_pass_filter = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
 
         for i in range(num_objects):
@@ -89,60 +92,65 @@ class KalmanFilter:
             self.kalmans[i].statePost = np.zeros((9,1), dtype=np.float32)
     
 
-    def predict_location(self, possible_new_objects):
+    def predict_location(self, objects):
         res = []
 
-        for i, kalman in enumerate(self.kalmans):
-            possible_new_positions = [x["pos"] for x in possible_new_objects]
-            if len(possible_new_positions) == 0:
-                break
+        dt = time.time() - self.prev_measurement_time
+        self.prev_measurement_time = time.time()
 
-            dt = time.time() - self.prev_measurement_time
-            self.prev_measurement_time = time.time()
+        for drone_index in range(0, num_objects):
+            possible_new_objects = [object for object in objects if object["droneIndex"] == drone_index]
+            possible_new_positions = [x["pos"] for x in possible_new_objects]
+
+            if len(possible_new_objects) == 0:
+                res.append({
+                    "pos": np.array([]),
+                    "vel": np.array([]),
+                    "heading": None,
+                    "droneIndex": drone_index
+                })
+                continue
+
+            kalman = self.kalmans[drone_index]
 
             kalman.transitionMatrix[:3, 3:6] = dt * np.eye(3)
             kalman.transitionMatrix[3:6, 6:9] = dt * np.eye(3)
             kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
+            # if all(kalman.statePost == 0): # if not initialized
+            #     A = kalman.statePost
+            #     A[0:3] = object["pos"].reshape((3, 1))
+            #     kalman.statePost = A
+            #     kalman.statePre = A
+            
             predicted_location = kalman.predict()[:3].T[0]
             distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
-            if all(kalman.statePost == 0): # if not initialized
-                A = kalman.statePost
-                A[0:3] = possible_new_positions[0].reshape((3, 1))
-                kalman.statePost = A
-                kalman.statePre = A
-            else:
-                print(distances_to_predicted_location)
-                distances_to_predicted_location = distances_to_predicted_location[distances_to_predicted_location < 0.5]
-            if len(distances_to_predicted_location) == 0:
-                continue
-
             closest_match_i = np.argmin(distances_to_predicted_location)
             new_pos = possible_new_positions[closest_match_i].astype(np.float32)
-            new_vel = ((new_pos - self.prev_positions[i]) / dt).astype(np.float32)
-            self.prev_positions[i] = new_pos
+            new_vel = ((new_pos - self.prev_positions[drone_index]) / dt).astype(np.float32)
+            self.prev_positions[drone_index] = new_pos
 
             kalman.correct(np.concatenate((new_pos, new_vel)))
             predicted_state = kalman.statePre[:6].T[0]  # Predicted 3D location
 
             heading = possible_new_objects[closest_match_i]["heading"]
-            heading = heading_low_pass_filter.filter(heading)[0]
+            heading = self.heading_low_pass_filter.filter(heading)[0]
             # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
 
             vel = predicted_state[3:6].copy()
-            vel[0:2] = low_pass_filter_xy.filter(vel[0:2])
-            vel[2] = low_pass_filter_z.filter(vel[2])[0]
-
-            del possible_new_objects[closest_match_i]
+            vel[0:2] = self.low_pass_filter_xy.filter(vel[0:2])
+            vel[2] = self.low_pass_filter_z.filter(vel[2])[0]
             
             res.append({
                 "pos": predicted_state[:3],
                 "vel": vel,
-                "heading": heading
+                "heading": heading,
+                "droneIndex": drone_index
             })
 
         return res
-    
+
+
     def reset(self):
         self.prev_measurement_time = time.time()-20
 
@@ -174,6 +182,7 @@ class Cameras:
         self.to_world_coords_matrix = None
 
         self.drone_armed = False
+
         self.kalman_filter = KalmanFilter()
 
         global cameras_init
@@ -226,6 +235,7 @@ class Cameras:
                         "vel": [],
                         "heading": 0
                     }
+                    filtered_objects = []
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
                         filtered_objects = self.kalman_filter.predict_location(objects)
@@ -249,7 +259,7 @@ class Cameras:
                     socketio.emit("object-points", {
                         "object_points": object_points.tolist(), 
                         "errors": errors.tolist(), 
-                        "objects": [{k:v.tolist() for (k,v) in object.items()} for object in objects], 
+                        "objects": [{k:(v.tolist() if isinstance(v, np.ndarray) else v) for (k,v) in object.items()} for object in objects], 
                         "filtered_objects": filtered_objects
                     })
         
@@ -723,21 +733,33 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
             epipolar_lines.append(line[0,0].tolist())
             frames[i] = drawlines(frames[i], line[0])
 
-        unmatched_image_points = np.array(image_points[i])
+        not_closest_match_image_points = np.array(image_points[i])
         points = np.array(image_points[i])
 
         for j, [a, b, c] in enumerate(epipolar_lines):
             distances_to_line = np.array([])
             if len(points) != 0:
                 distances_to_line = np.abs(a*points[:,0] + b*points[:,1] + c) / np.sqrt(a**2 + b**2)
-            possible_matches = points[distances_to_line < 20]
+
+            possible_matches = points[distances_to_line < 5].copy()
+
+            # Commenting out this code produces more points, but more garbage points too
+            # delete closest match from future consideration
+            # if len(points) != 0:
+            #     points = np.delete(points, np.argmin(distances_to_line), axis=0)
+
+            # sort possible matches from smallest to largest
+            distances_to_line = distances_to_line[distances_to_line < 5]
+            possible_matches_sorter = distances_to_line.argsort()
+            possible_matches = possible_matches[possible_matches_sorter]
     
             if len(possible_matches) == 0:
                 for possible_group in correspondances[j]:
                     possible_group.append([None, None])
             else:
-                unmatched_image_points = [row for row in unmatched_image_points.tolist() if row not in possible_matches.tolist()]
-                unmatched_image_points = np.array(unmatched_image_points)
+                not_closest_match_image_points = [row for row in not_closest_match_image_points.tolist() if row != possible_matches.tolist()[0]]
+                not_closest_match_image_points = np.array(not_closest_match_image_points)
+                
                 new_correspondances_j = []
                 for possible_match in possible_matches:
                     temp = copy.deepcopy(correspondances[j])
@@ -746,10 +768,10 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
                     new_correspondances_j += temp
                 correspondances[j] = new_correspondances_j
 
-        for unmatched_image_point in unmatched_image_points:
-            root_image_points.append({"camera": i, "point": unmatched_image_point})
+        for not_closest_match_image_point in not_closest_match_image_points:
+            root_image_points.append({"camera": i, "point": not_closest_match_image_point})
             temp = [[[None, None]] * i]
-            temp[0].append(unmatched_image_point.tolist())
+            temp[0].append(not_closest_match_image_point.tolist())
             correspondances.append(temp)
 
     object_points = []
@@ -768,7 +790,8 @@ def find_point_correspondance_and_object_points(image_points, camera_poses, fram
     return np.array(errors), np.array(object_points), frames
 
 def locate_objects(object_points, errors):
-    dist = 0.15
+    dist1 = 0.095
+    dist2 = 0.15
 
     distance_matrix = np.zeros((object_points.shape[0], object_points.shape[0]))
     already_matched_points = []
@@ -781,29 +804,46 @@ def locate_objects(object_points, errors):
     for i in range(0, object_points.shape[0]):
         if i in already_matched_points:
             continue
+        
+        distance_deltas = np.abs(distance_matrix[i] - dist1)
+        num_matches = distance_deltas < 0.01
+        matches_index = np.where(distance_deltas < 0.01)[0]
+        if np.sum(num_matches) >= 2:
+            for possible_pair in cartesian_product(matches_index, matches_index):
+                pair_distance = np.sqrt(np.sum((object_points[possible_pair[0]] - object_points[possible_pair[1]])**2))
+                
+                # if the pair isnt the correct distance apart
+                if np.abs(pair_distance - dist2) > 0.01:
+                    continue
 
-        matches = np.abs(distance_matrix[i] - dist) < 0.025
-        if np.any(matches):
-            best_match_i = np.argmax(matches)
+                best_match_1_i = possible_pair[0]
+                best_match_2_i = possible_pair[1]
 
-            already_matched_points.append(i)
-            already_matched_points.append(best_match_i)
+                already_matched_points.append(i)
+                already_matched_points.append(best_match_1_i)
+                already_matched_points.append(best_match_2_i)
 
-            location = (object_points[i]+object_points[best_match_i])/2
-            error = np.mean([errors[i], errors[best_match_i]])
+                location = (object_points[best_match_1_i]+object_points[best_match_2_i])/2
+                error = np.mean([errors[i], errors[best_match_1_i], errors[best_match_2_i]])
 
-            heading_vec = object_points[best_match_i] - object_points[i]
-            heading_vec /= linalg.norm(heading_vec)
-            heading = np.arctan2(heading_vec[1], heading_vec[0])
+                heading_vec = object_points[best_match_1_i] - object_points[best_match_2_i]
+                heading_vec /= linalg.norm(heading_vec)
+                heading = np.arctan2(heading_vec[1], heading_vec[0])
 
-            heading = heading - np.pi if heading > np.pi/2 else heading
-            heading = heading + np.pi if heading < -np.pi/2 else heading
+                heading = heading - np.pi if heading > np.pi/2 else heading
+                heading = heading + np.pi if heading < -np.pi/2 else heading
 
-            objects.append({
-                "pos": location,
-                "heading": -heading,
-                "error": error
-            })
+                # determine drone index based on which side third light is on
+                drone_index = 0 if (object_points[i] - location)[1] > 0 else 1
+
+                objects.append({
+                    "pos": location,
+                    "heading": -heading,
+                    "error": error,
+                    "droneIndex": drone_index
+                })
+
+                break
     
     return objects
 
@@ -891,6 +931,9 @@ def camera_pose_to_serializable(camera_poses):
         camera_poses[i] = {k: v.tolist() for (k, v) in camera_poses[i].items()}
 
     return camera_poses
+
+def cartesian_product(x, y):
+    return np.array([[x0, y0] for x0 in x for y0 in y])
 
 
 if __name__ == '__main__':
