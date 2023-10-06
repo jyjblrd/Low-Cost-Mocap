@@ -63,12 +63,12 @@ class KalmanFilter:
         self.prev_measurement_time = 0
         self.prev_positions = []
 
-        self.low_pass_filter_xy = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=2)
-        self.low_pass_filter_z = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
-        self.heading_low_pass_filter = LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1)
+        self.low_pass_filter_xy = []
+        self.low_pass_filter_z = []
+        self.heading_low_pass_filter = []
 
         for i in range(num_objects):
-            self.prev_positions.append(0)
+            self.prev_positions.append([0,0,0])
             self.kalmans.append(cv.KalmanFilter(state_dim, measurement_dim))
             self.kalmans[i].transitionMatrix = np.array([[1, 0, 0, dt, 0, 0, 0.5*dt**2, 0, 0],
                                                     [0, 1, 0, 0, dt, 0, 0, 0.5*dt**2, 0],
@@ -90,6 +90,11 @@ class KalmanFilter:
                                                     [0, 0, 0, 0, 0, 1, 0, 0, 0]], dtype=np.float32)
             
             self.kalmans[i].statePost = np.zeros((9,1), dtype=np.float32)
+
+
+            self.low_pass_filter_xy.append(LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=2))
+            self.low_pass_filter_z.append(LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1))
+            self.heading_low_pass_filter.append(LowPassFilter(cutoff_frequency=20, sampling_frequency=60.0, dims=1))
     
 
     def predict_location(self, objects):
@@ -103,12 +108,6 @@ class KalmanFilter:
             possible_new_positions = [x["pos"] for x in possible_new_objects]
 
             if len(possible_new_objects) == 0:
-                res.append({
-                    "pos": np.array([]),
-                    "vel": np.array([]),
-                    "heading": None,
-                    "droneIndex": drone_index
-                })
                 continue
 
             kalman = self.kalmans[drone_index]
@@ -117,11 +116,11 @@ class KalmanFilter:
             kalman.transitionMatrix[3:6, 6:9] = dt * np.eye(3)
             kalman.transitionMatrix[:3, 6:9] = 0.5 * dt**2 * np.eye(3)
 
-            # if all(kalman.statePost == 0): # if not initialized
-            #     A = kalman.statePost
-            #     A[0:3] = object["pos"].reshape((3, 1))
-            #     kalman.statePost = A
-            #     kalman.statePre = A
+            if all(kalman.statePost == 0): # if not initialized
+                A = kalman.statePost
+                A[0:3] = possible_new_positions[0].reshape((3, 1))
+                kalman.statePost = A
+                kalman.statePre = A
             
             predicted_location = kalman.predict()[:3].T[0]
             distances_to_predicted_location = np.sqrt(np.sum((possible_new_positions - predicted_location)**2, axis=1))
@@ -134,12 +133,12 @@ class KalmanFilter:
             predicted_state = kalman.statePre[:6].T[0]  # Predicted 3D location
 
             heading = possible_new_objects[closest_match_i]["heading"]
-            heading = self.heading_low_pass_filter.filter(heading)[0]
+            heading = self.heading_low_pass_filter[drone_index].filter(heading)[0]
             # heading, self.z = signal.lfilter(self.b, 1, [heading], zi=self.z)
 
             vel = predicted_state[3:6].copy()
-            vel[0:2] = self.low_pass_filter_xy.filter(vel[0:2])
-            vel[2] = self.low_pass_filter_z.filter(vel[2])[0]
+            vel[0:2] = self.low_pass_filter_xy[drone_index].filter(vel[0:2])
+            vel[2] = self.low_pass_filter_z[drone_index].filter(vel[2])[0]
             
             res.append({
                 "pos": predicted_state[:3],
