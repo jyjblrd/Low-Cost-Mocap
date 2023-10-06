@@ -22,7 +22,7 @@ import json
 
 serialLock = threading.Lock()
 
-ser = serial.Serial("/dev/cu.usbserial-02X2K2GE", 460800, write_timeout=1, )
+ser = serial.Serial("/dev/cu.usbserial-02X2K2GE", 1000000, write_timeout=1, )
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
@@ -229,19 +229,14 @@ class Cameras:
                         object_points[i] = new_object_point
 
                     objects = []
-                    filtered_object = {
-                        "pos": [],
-                        "vel": [],
-                        "heading": 0
-                    }
                     filtered_objects = []
                     if self.is_locating_objects:
                         objects = locate_objects(object_points, errors)
                         filtered_objects = self.kalman_filter.predict_location(objects)
                         
                         if len(filtered_objects) != 0:
-                            for i, filtered_object in enumerate(filtered_objects):
-                                if self.drone_armed[i]:
+                            for filtered_object in filtered_objects:
+                                if self.drone_armed[filtered_object['droneIndex']]:
                                     filtered_object["heading"] = round(filtered_object["heading"], 4)
 
                                     serial_data = { 
@@ -249,7 +244,8 @@ class Cameras:
                                         "vel": [round(x, 4) for x in filtered_object["vel"].tolist()]
                                     }
                                     with serialLock:
-                                        ser.write(f"{i}{json.dumps(serial_data)}".encode('utf-8'))
+                                        ser.write(f"{filtered_object['droneIndex']}{json.dumps(serial_data)}".encode('utf-8'))
+                                        time.sleep(0.001)
                             
                         for filtered_object in filtered_objects:
                             filtered_object["vel"] = filtered_object["vel"].tolist()
@@ -432,7 +428,8 @@ def arm_drone(data):
         "pid": [float(x) for x in data["dronePID"]],
     }
     with serialLock:
-        ser.write(json.dumps(serial_data).encode('utf-8'))
+        ser.write(f"{str(data['droneIndex'])}{json.dumps(serial_data)}".encode('utf-8'))
+        time.sleep(0.01)
 
 @socketio.on("set-drone-setpoint")
 def arm_drone(data):
@@ -441,6 +438,7 @@ def arm_drone(data):
     }
     with serialLock:
         ser.write(f"{str(data['droneIndex'])}{json.dumps(serial_data)}".encode('utf-8'))
+        time.sleep(0.01)
 
 @socketio.on("set-drone-trim")
 def arm_drone(data):
@@ -448,7 +446,8 @@ def arm_drone(data):
         "trim": [int(x) for x in data["droneTrim"]],
     }
     with serialLock:
-        ser.write(json.dumps(serial_data).encode('utf-8'))
+        ser.write(f"{str(data['droneIndex'])}{json.dumps(serial_data)}".encode('utf-8'))
+        time.sleep(0.01)
 
 
 @socketio.on("acquire-floor")
@@ -805,14 +804,14 @@ def locate_objects(object_points, errors):
             continue
         
         distance_deltas = np.abs(distance_matrix[i] - dist1)
-        num_matches = distance_deltas < 0.01
-        matches_index = np.where(distance_deltas < 0.01)[0]
+        num_matches = distance_deltas < 0.025
+        matches_index = np.where(distance_deltas < 0.025)[0]
         if np.sum(num_matches) >= 2:
             for possible_pair in cartesian_product(matches_index, matches_index):
                 pair_distance = np.sqrt(np.sum((object_points[possible_pair[0]] - object_points[possible_pair[1]])**2))
                 
                 # if the pair isnt the correct distance apart
-                if np.abs(pair_distance - dist2) > 0.01:
+                if np.abs(pair_distance - dist2) > 0.025:
                     continue
 
                 best_match_1_i = possible_pair[0]

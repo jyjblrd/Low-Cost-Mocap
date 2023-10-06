@@ -4,12 +4,17 @@
 #include <ArduinoJson.h>
 #include <PID_v1.h>
 #include <stdint.h>
+#include <EEPROM.h>
 #include "sbus.h"
 
 #define batVoltagePin 34
 #define MAX_VEL 100
 #define ROTOR_RADIUS 0.0225
 #define Z_GAIN 0.7
+
+#define DRONE_INDEX 1
+
+#define EEPROM_SIZE 4
 
 unsigned long lastPing;
 
@@ -60,7 +65,11 @@ unsigned long lastSbusSend = micros();
 float loopFrequency = 2000.0;
 float sbusFrequency = 50.0;
 
-uint8_t newMACAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A };
+#if DRONE_INDEX == 0
+  uint8_t newMACAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x61, 0x3A };
+#elif DRONE_INDEX == 1
+  uint8_t newMACAddress[] = { 0xC0, 0x4E, 0x30, 0x4B, 0x80, 0x3B };
+#endif
 
 // callback function that will be executed when data is received
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
@@ -167,6 +176,15 @@ void setup() {
   xVelPID.SetMode(AUTOMATIC);
   yVelPID.SetMode(AUTOMATIC);
   zVelPID.SetMode(AUTOMATIC);
+  
+  // Sample rate is determined by main loop
+  xPosPID.SetSampleTime(0);
+  yPosPID.SetSampleTime(0);
+  zPosPID.SetSampleTime(0);
+  yawPosPID.SetSampleTime(0);
+  xVelPID.SetSampleTime(0);
+  yVelPID.SetSampleTime(0);
+  zVelPID.SetSampleTime(0);
 
   xPosPID.SetOutputLimits(-MAX_VEL, MAX_VEL);
   yPosPID.SetOutputLimits(-MAX_VEL, MAX_VEL);
@@ -175,6 +193,13 @@ void setup() {
   xVelPID.SetOutputLimits(-1, 1);
   yVelPID.SetOutputLimits(-1, 1);
   zVelPID.SetOutputLimits(-1, 1);
+
+  EEPROM.begin(EEPROM_SIZE);
+
+  // xTrim = EEPROM.read(0);
+  // yTrim = EEPROM.read(1);
+  // zTrim = EEPROM.read(2);
+  // yawTrim = EEPROM.read(3);
 
   lastPing = micros();
   lastLoopTime = micros();

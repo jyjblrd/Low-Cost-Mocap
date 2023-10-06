@@ -51,14 +51,14 @@ export default function App() {
   const [droneSetpointWithMotion, setDroneSetpointWithMotion] = useState([0,0,0])
   const [droneTrim, setDroneTrim] = useState(["0","0","0","0"])
 
-  const [motionPreset, setMotionPreset] = useState("setpoint")
+  const [motionPreset, setMotionPreset] = useState(["setpoint", "setpoint"])
 
   const [trajectoryPlanningMaxVel, setTrajectoryPlanningMaxVel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxAccel, setTrajectoryPlanningMaxAccel] = useState(["1", "1", "1"])
   const [trajectoryPlanningMaxJerk, setTrajectoryPlanningMaxJerk] = useState(["0.5", "0.5", "0.5"])
   // const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[0.2,0.2,0.5,true],\n[-0.2,0.2,0.5,true],\n[-0.2,0.2,0.8,true],\n[-0.2,-0.2,0.8,true],\n[-0.2,-0.2,0.5,true],\n[0.2,-0.2,0.5,true],\n[0.2,-0.2,0.8,true],\n[0.2,0.2,0.8,true],\n[0.2,0.2,0.5,true]\n]")
   const [trajectoryPlanningWaypoints, setTrajectoryPlanningWaypoints] = useState("[\n[0.2,0.2,0.6,0,0,0.8,true],\n[-0.2,0.2,0.6,0.2,0.2,0.6,true],\n[-0.2,-0.2,0.5,0,0,0.4,true],\n[0.2,-0.2,0.5,-0.2,-0.2,0.6,true],\n[0.2,0.2,0.5,0,0,0.8,true]\n]")
-  const [trajectoryPlanningSetpoints, setTrajectoryPlanningSetpoints] = useState<number[][]>([])
+  const [trajectoryPlanningSetpoints, setTrajectoryPlanningSetpoints] = useState<number[][][]>([])
   const [trajectoryPlanningRunStartTimestamp, setTrajectoryPlanningRunStartTimestamp] = useState(0)
 
   const updateCameraSettings: FormEventHandler = (e) => {
@@ -100,23 +100,26 @@ export default function App() {
   }, [droneArmed])
 
   useEffect(() => {
-    socket.emit("set-drone-pid", { dronePID })
+    for (let droneIndex = 0; droneIndex<NUM_DRONES; droneIndex++) {
+      socket.emit("set-drone-pid", { dronePID, droneIndex })
+    }
   }, [dronePID])
 
   useEffect(() => {
-    socket.emit("set-drone-trim", { droneTrim })
+    socket.emit("set-drone-trim", { droneTrim, droneIndex: currentDroneIndex })
   }, [droneTrim])
 
   useEffect(() => {
     let timestamp = Date.now()/1000
+    let motionIntervals: NodeJS.Timer[] = []
 
     for (let droneIndex = 0; droneIndex < NUM_DRONES; droneIndex++) {
-      if (motionPreset !== "setpoint") {
-        const motionInterval = setInterval(() => {
+      if (motionPreset[droneIndex] !== "setpoint") {
+        motionIntervals.push(setInterval(() => {
           timestamp = Date.now()/1000
           let tempDroneSetpoint = [] as number[]
 
-          switch (motionPreset) {
+          switch (motionPreset[droneIndex]) {
             case "none": {
               break;
             }
@@ -171,7 +174,9 @@ export default function App() {
                 socket.emit("set-drone-setpoint", { "droneSetpoint": tempDroneSetpoint, droneIndex })
               }
               else {
-                setMotionPreset("setpoint")
+                let newMotionPreset = motionPreset.slice()
+                newMotionPreset[droneIndex] = "setpoint"
+                setMotionPreset(newMotionPreset)
               }
               break;
             }
@@ -183,11 +188,7 @@ export default function App() {
           if (droneIndex === currentDroneIndex) {
             setDroneSetpointWithMotion(tempDroneSetpoint)
           }
-        }, TRAJECTORY_PLANNING_TIMESTEP*1000)
-
-        return () => {
-          clearInterval(motionInterval)
-        }
+        }, TRAJECTORY_PLANNING_TIMESTEP*1000))
       }
       else {
         if (droneIndex === currentDroneIndex) {
@@ -195,6 +196,12 @@ export default function App() {
         }
         socket.emit("set-drone-setpoint", { "droneSetpoint": droneSetpoint[droneIndex], droneIndex })
       }
+    }
+
+    return () => {
+      motionIntervals.forEach(motionInterval => {
+        clearInterval(motionInterval)
+      })
     }
   }, [motionPreset, droneSetpoint, trajectoryPlanningRunStartTimestamp])
 
@@ -675,13 +682,13 @@ export default function App() {
                   className='float-end'
                   variant={droneArmed ? "outline-danger" : "outline-primary"}
                   onClick={async () => {
-                    setMotionPreset("none")
+                    setMotionPreset(new Array(NUM_DRONES).fill("none"))
                     const initPos = JSON.parse(trajectoryPlanningWaypoints)[0].slice(0,3)
                     await Promise.all(Array.from(Array(NUM_DRONES).keys()).map(async (droneIndex) => {
                       await moveToPos(initPos, droneIndex)
                     }))
                     setTrajectoryPlanningRunStartTimestamp(Date.now()/1000)
-                    setMotionPreset("plannedTrajectory")
+                    setMotionPreset(new Array(NUM_DRONES).fill("plannedTrajectory"))
                   }}
                 >
                   Run
@@ -711,44 +718,34 @@ export default function App() {
           <Card className='shadow-sm p-3 h-100'>
             <Row>
               <Col xs="auto">
-                <h4>Arm Drone</h4>
+                <h4>Control Drone</h4>
               </Col>
-              <Col>
-                <Button
-                  size='sm' 
-                  variant={droneArmed[currentDroneIndex] ? "outline-danger" : "outline-primary"}
-                  disabled={!isTriangulatingPoints}
-                  onClick={() => {
-                    let newDroneArmed = droneArmed.slice()
-                    newDroneArmed[currentDroneIndex] = !newDroneArmed[currentDroneIndex]
-                    setDroneArmed(newDroneArmed);
-                  }
-                }>
-                  {droneArmed[currentDroneIndex] ? "Disarm" : "Arm"}
-                </Button>
-              </Col>
-              <Col>
+              <Col xs="3">
                 <Form.Select value={currentDroneIndex} onChange={(e) => setCurrentDroneIndex(parseInt(e.target.value))} size='sm'>
                   <option value="0">Drone 0</option>
                   <option value="1">Drone 1</option>
                 </Form.Select>
               </Col>
             </Row>
-            <Row className='pt-3'>
-              <Col xs={{offset:3}} className='text-center'>
-                X
-              </Col>
-              <Col className='text-center'>
-                Y
-              </Col>
-              <Col className='text-center'>
-                Z
-              </Col>
-            </Row>
             { Array.from(Array(NUM_DRONES).keys()).map((droneIndex) => (
-              <Row className='pt-2'>
+            <>
+              <Row className='pt-4'>
+                <Col xs="3">
+                  <h5>Drone {droneIndex}</h5>
+                </Col>
+                <Col className='text-center'>
+                  X
+                </Col>
+                <Col className='text-center'>
+                  Y
+                </Col>
+                <Col className='text-center'>
+                  Z
+                </Col>
+              </Row>
+              <Row>
                 <Col xs={3} className='pt-2'>
-                  Setpoint {droneIndex}
+                  Setpoint
                 </Col>
                 <Col>
                   <Form.Control 
@@ -781,53 +778,78 @@ export default function App() {
                   />
                 </Col>
               </Row>
-            ))}
-            <Row className='pt-2'>
-              <Col>
-                <Button
-                  size='sm' 
-                  onClick={() => {
-                    setMotionPreset("setpoint");
-                  }
-                }>
-                  Setpoint
-                </Button>
-              </Col>
-              <Col>
-                <Button
-                  size='sm' 
-                  onClick={() => {
-                    setMotionPreset("circle");
-                  }
-                }>
-                  Circle
-                </Button>
-              </Col>
-              <Col>
-                <Button
-                  size='sm' 
-                  onClick={() => {
-                    setMotionPreset("square");
-                  }
-                }>
-                  Square
-                </Button>
-              </Col>
-              <Col>
-                <Button
-                  size='sm' 
-                  onClick={async () => {
-                    await Promise.all(Array.from(Array(NUM_DRONES).keys()).map(async (droneIndex) => {
+              <Row className='pt-3'>
+                <Col>
+                  <Button
+                    size='sm' 
+                    variant={droneArmed[droneIndex] ? "outline-danger" : "outline-primary"}
+                    disabled={!isTriangulatingPoints}
+                    onClick={() => {
+                      let newDroneArmed = droneArmed.slice()
+                      newDroneArmed[droneIndex] = !newDroneArmed[droneIndex]
+                      setDroneArmed(newDroneArmed);
+                    }
+                  }>
+                    {droneArmed[droneIndex] ? "Disarm" : "Arm"}
+                  </Button>
+                </Col>
+                <Col>
+                  <Button
+                    size='sm' 
+                    onClick={() => {
+                      let newMotionPreset = motionPreset.slice()
+                      newMotionPreset[droneIndex] = "setpoint"
+                      setMotionPreset(newMotionPreset);
+                    }
+                  }>
+                    Setpoint
+                  </Button>
+                </Col>
+                <Col>
+                  <Button
+                    size='sm' 
+                    onClick={() => {
+                      let newMotionPreset = motionPreset.slice()
+                      newMotionPreset[droneIndex] = "circle"
+                      setMotionPreset(newMotionPreset);
+                    }
+                  }>
+                    Circle
+                  </Button>
+                </Col>
+                <Col>
+                  <Button
+                    size='sm' 
+                    onClick={() => {
+                      let newMotionPreset = motionPreset.slice()
+                      newMotionPreset[droneIndex] = "square"
+                      setMotionPreset(newMotionPreset);
+                    }
+                  }>
+                    Square
+                  </Button>
+                </Col>
+                <Col>
+                  <Button
+                    size='sm' 
+                    onClick={async () => {
                       await moveToPos([0,0,LAND_Z_HEIGHT], droneIndex)
-                    }))
-                    setDroneArmed(Array.apply(null, Array(NUM_DRONES)).map(() => (false)))
-                    setMotionPreset("setpoint")
-                  }
-                }>
-                  Land
-                </Button>
-              </Col>
-            </Row>
+
+                      let newDroneArmed = droneArmed.slice()
+                      newDroneArmed[droneIndex] = false
+                      setDroneArmed(newDroneArmed);
+
+                      let newMotionPreset = motionPreset.slice()
+                      newMotionPreset[droneIndex] = "setpoint"
+                      setMotionPreset(newMotionPreset);
+                    }
+                  }>
+                    Land
+                  </Button>
+                </Col>
+              </Row>
+            </>
+            ))}
             <Row className='pt-3'>
               <Col xs={{offset:2}} className='text-center'>
                 Pos P
