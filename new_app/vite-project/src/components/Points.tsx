@@ -29,7 +29,7 @@ export default function Points({objectPointsRef, objectPointErrorsRef, count}: {
   }, [count])
   return (
     <instancedMesh ref={instancedMeshRef} args={[undefined, undefined, objectPoints.length]}>
-      <sphereGeometry args={[0.005, 4, 4]}/>
+      <sphereGeometry args={[0.008, 4, 4]}/>
       <meshLambertMaterial />
     </instancedMesh>
   )

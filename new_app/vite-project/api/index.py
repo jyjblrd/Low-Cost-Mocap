@@ -262,6 +262,7 @@ class Cameras:
 
     def get_frames(self):
         frames = self._camera_read()
+        #frames = [add_white_border(frame, 5) for frame in frames]
 
         return np.hstack(frames)
 
@@ -655,7 +656,7 @@ def bundle_adjustment(image_points, camera_poses):
         init_params = np.concatenate([init_params, camera_pose["t"].flatten()])
 
     res = optimize.least_squares(
-        residual_function, init_params, verbose=2, loss="soft_l1"
+        residual_function, init_params, verbose=2, loss="cauchy"
     )
     return params_to_camera_poses(res.x)[0]
     
@@ -921,6 +922,16 @@ def make_square(img):
     new_img = np.zeros((size, size, 3), dtype=np.uint8)
     ax,ay = (size - img.shape[1])//2,(size - img.shape[0])//2
     new_img[ay:img.shape[0]+ay,ax:ax+img.shape[1]] = img
+
+    # Pad the new_img array with edge pixel values
+    # Apply feathering effect
+    feather_pixels = 8
+    for i in range(feather_pixels):
+        alpha = (i + 1) / feather_pixels
+        new_img[ay - i - 1, :] = img[0, :] * (1 - alpha)  # Top edge
+        new_img[ay + img.shape[0] + i, :] = img[-1, :] * (1 - alpha)  # Bottom edge
+
+
     return new_img
 
 
@@ -932,6 +943,11 @@ def camera_pose_to_serializable(camera_poses):
 
 def cartesian_product(x, y):
     return np.array([[x0, y0] for x0 in x for y0 in y])
+
+def add_white_border(image, border_size):
+    height, width = image.shape[:2]
+    bordered_image = cv.copyMakeBorder(image, border_size, border_size, border_size, border_size, cv.BORDER_CONSTANT, value=[255, 255, 255])
+    return bordered_image
 
 
 if __name__ == '__main__':
