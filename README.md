@@ -9,6 +9,8 @@ Then run `yarn run dev` to start the webserver. You will be given a url view the
 
 In another terminal window, run `python3 api/index.py` to start the backend server. This is what receives the camera streams and does motion capture computations.
 
+You may need to install the pseyepy python library. Instructions to do so are here: [https://github.com/bensondaled/pseyepy](https://github.com/bensondaled/pseyepy)
+
 ## Documentation
 The documentation for this project is admittedly pretty lacking, if anyone would like to put type definitions in the Python code that would be amazing and probably go a long way to helping the readability of the code. Feel free to also use the [discussion](https://github.com/jyjblrd/Mocap-Drones/discussions) tab to ask questions.
 
