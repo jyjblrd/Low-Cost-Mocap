@@ -9,8 +9,17 @@ This project requires the sfm (structure from motion) OpenCV module, which requi
 
 `cv.sfm` is only used 3 times in the codebase for the following functions: `fundamentalFromProjections`, `essentialFromFundamental`, `motionFromEssential`. So really, those functions should just be reimplemented in Python so the sfm module isn't needed. [Issue](https://github.com/jyjblrd/Mocap-Drones/issues/4).
 
+On OSX install yarn `brew install yarn` 
+
+pip install flask_socketio
+
+pip install ruckig
+
+pip install flask-cors
+
 ## Runing the code
-Run `yarn run install` to install node dependencies 
+
+From the computer_code directory Run `yarn install` to install node dependencies 
 
 Then run `yarn run dev` to start the webserver. You will be given a url view the frontend interface.
 
