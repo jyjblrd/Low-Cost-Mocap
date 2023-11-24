@@ -11,12 +11,6 @@ This project requires the sfm (structure from motion) OpenCV module, which requi
 
 On OSX install yarn `brew install yarn` 
 
-pip install flask_socketio
-
-pip install ruckig
-
-pip install flask-cors
-
 ## Runing the code
 
 From the computer_code directory Run `yarn install` to install node dependencies 
