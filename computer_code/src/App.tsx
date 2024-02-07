@@ -14,7 +14,7 @@ import { socket } from './shared/styles/scripts/socket';
 import { matrix, mean, multiply, rotationMatrix } from 'mathjs';
 import Objects from './components/Objects';
 import Chart from './components/chart';
-import TrajectoryPlanningSetpoints from './components/trajectoryPlanningSetpoints';
+import TrajectoryPlanningSetpoints from './components/TrajectoryPlanningSetpoints';
 
 const TRAJECTORY_PLANNING_TIMESTEP = 0.05
 const LAND_Z_HEIGHT = 0.075
