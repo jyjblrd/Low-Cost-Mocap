@@ -1,4 +1,4 @@
-# Mocap Drones
+# Low Cost Mocap (for drones)
 
 ### A general purpose motion capture system built from the ground up, used to autonomously fly multiple drones indoors
 
