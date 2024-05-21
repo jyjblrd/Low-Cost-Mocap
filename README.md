@@ -5,10 +5,6 @@
 ## Dependencies
 Install the pseyepy python library: [https://github.com/bensondaled/pseyepy](https://github.com/bensondaled/pseyepy)
 
-This project requires the sfm (structure from motion) OpenCV module, which requires you to compile OpenCV from source. This is a bit of a pain, but these links should help you get started: [SFM dependencies](https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html) [OpenCV module installation guide](https://github.com/opencv/opencv_contrib/blob/master/README.md)
-
-`cv.sfm` is only used 3 times in the codebase for the following functions: `fundamentalFromProjections`, `essentialFromFundamental`, `motionFromEssential`. So really, those functions should just be reimplemented in Python so the sfm module isn't needed. [Issue](https://github.com/jyjblrd/Mocap-Drones/issues/4).
-
 install npm and yarn
 
 ## Runing the code
