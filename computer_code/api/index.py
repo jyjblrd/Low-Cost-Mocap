@@ -1,4 +1,4 @@
-from helpers import camera_pose_to_serializable, calculate_reprojection_errors, bundle_adjustment, Cameras, triangulate_points
+from helpers import camera_pose_to_serializable, calculate_reprojection_errors, bundle_adjustment, Cameras, triangulate_points, essential_from_fundamental, motion_from_essential
 from KalmanFilter import KalmanFilter
 
 from flask import Flask, Response, request
@@ -244,8 +244,8 @@ def calculate_camera_pose(data):
         camera2_image_points = np.take(camera2_image_points, not_none_indicies, axis=0).astype(np.float32)
 
         F, _ = cv.findFundamentalMat(camera1_image_points, camera2_image_points, cv.FM_RANSAC, 1, 0.99999)
-        E = cv.sfm.essentialFromFundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
-        possible_Rs, possible_ts = cv.sfm.motionFromEssential(E)
+        E = essential_from_fundamental(F, cameras.get_camera_params(0)["intrinsic_matrix"], cameras.get_camera_params(1)["intrinsic_matrix"])
+        possible_Rs, possible_ts = motion_from_essential(E)
 
         R = None
         t = None
