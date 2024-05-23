@@ -6,7 +6,7 @@
 Watch this for information about the project & a demo!
 [https://youtu.be/0ql20JKrscQ?si=jkxyOe-iCG7fa5th](https://youtu.be/0ql20JKrscQ?si=jkxyOe-iCG7fa5th)
 
-[<img src="https://github.com/jyjblrd/Mocap-Drones/blob/main/images/thumbnail.png">]([https://link-to-your-URL/](https://youtu.be/0ql20JKrscQ?si=jkxyOe-iCG7fa5th))
+[<img src="https://github.com/jyjblrd/Mocap-Drones/blob/main/images/thumbnail.png">](https://youtu.be/0ql20JKrscQ?si=jkxyOe-iCG7fa5th)
 
 ## Architectural Diagram
 ![](https://github.com/jyjblrd/Mocap-Drones/blob/main/images/architecture.png?raw=true)
